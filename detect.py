@@ -142,6 +142,69 @@ def detect(save_img=False):
 
     print('Done. (%.3fs)' % (time.time() - t0))
 
+def get_model(model_path):
+    device = select_device("cpu")
+    half = device.type != 'cpu'  # half precision only supported on CUDA
+    # Load model
+    model = attempt_load(model_path, map_location=device)  # load FP32 model
+    if half:
+        model.half()  # to FP16
+    # Get names and colors
+    names = model.module.names if hasattr(model, 'module') else model.names
+    colors = [[random.randint(0, 255) for _ in range(3)] for _ in names]
+    return model
+    
+class Result:
+    def __init__(self, output):
+        *self.xyxy, self.conf, self.cls = output
+    def normalise_coords(self, img_shape):
+        H,W,_ = img_shape
+        x1,y1,x2,y2 = self.xyxy
+        x1 /= W
+        y1 /= H
+        x2 /= W
+        y2 /= H
+        self.n_xyxy = (x1,y1,x2,y2)
+        self.percentage_of_img()
+    def percentage_of_img(self):
+        _w = self.n_xyxy[2] - self.n_xyxy[0]
+        _h = self.n_xyxy[3] - self.n_xyxy[1]
+        self.percentage_of_screen = _w * _h * 100
+def detect_single(img=None, model=None):
+    device = select_device("cpu")
+    half = device.type != 'cpu'  # half precision only supported on CUDA
+    if type(img) == type(None):
+        # cap = cv2.VideoCapture("../Demo/mariab_videos/1_@2020-07-27T125958.216Z.mp4")
+        cap = cv2.VideoCapture(0)
+        time.sleep(1)
+        _, img = cap.read()
+        cap.release()
+    if model == None:
+        model = get_model("../yolov5/weights/yolov5s_body_face_baseline.pt")
+    img_shape = img.shape
+    imgsz = 320
+    imgsz = check_img_size(imgsz, s=model.stride.max())  # check img_size
+    # img = torch.zeros((1, 3, imgsz, imgsz), device=device)  # init img
+    # _ = model(img.half() if half else img) if device.type != 'cpu' else None  # run once
+    # Padded resize
+    img = letterbox(img, new_shape=imgsz)[0]
+    # Convert
+    img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to 3x416x416
+    img = np.ascontiguousarray(img)
+    img = torch.from_numpy(img).to(device)
+    img = img.half() if half else img.float()  # uint8 to fp16/32
+    img /= 255.0  # 0 - 255 to 0.0 - 1.0
+    if img.ndimension() == 3:
+        img = img.unsqueeze(0)
+    pred = model(img, augment=False)[0]
+    # Apply NMS
+    pred = non_max_suppression(pred, 0.25, 0.45, classes=None, agnostic=False)
+    results = []
+    for det in pred[0]:
+        # det[:, :4] = scale_coords(img.shape[2:], det[:, :4], img_shape).round()
+        results.append(Result(det))
+        results[-1].normalise_coords((imgsz, imgsz, 3))
+    return results
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
