@@ -1,3 +1,5 @@
+!weights/bodyFaceWeightsBaseline.pt
+
 # Repo-specific GitIgnore ----------------------------------------------------------------------------------------------
 *.jpg
 *.jpeg
