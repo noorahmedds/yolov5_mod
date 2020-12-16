@@ -5,7 +5,7 @@ from pathlib import Path
 import cv2
 import torch
 import torch.backends.cudnn as cudnn
-from numpy import random
+from numpy import random, ascontiguousarray
 
 from models.experimental import attempt_load
 from utils.datasets import LoadStreams, LoadImages, letterbox
@@ -153,7 +153,7 @@ def get_model(model_path):
     names = model.module.names if hasattr(model, 'module') else model.names
     colors = [[random.randint(0, 255) for _ in range(3)] for _ in names]
     return model
-    
+
 class Result:
     def __init__(self, output):
         *self.xyxy, self.conf, self.cls = output
@@ -170,6 +170,7 @@ class Result:
         _w = self.n_xyxy[2] - self.n_xyxy[0]
         _h = self.n_xyxy[3] - self.n_xyxy[1]
         self.percentage_of_screen = _w * _h * 100
+
 def detect_single(img=None, model=None):
     device = select_device("cpu")
     half = device.type != 'cpu'  # half precision only supported on CUDA
@@ -190,7 +191,7 @@ def detect_single(img=None, model=None):
     img = letterbox(img, new_shape=imgsz)[0]
     # Convert
     img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to 3x416x416
-    img = np.ascontiguousarray(img)
+    img = ascontiguousarray(img)
     img = torch.from_numpy(img).to(device)
     img = img.half() if half else img.float()  # uint8 to fp16/32
     img /= 255.0  # 0 - 255 to 0.0 - 1.0
@@ -199,12 +200,18 @@ def detect_single(img=None, model=None):
     pred = model(img, augment=False)[0]
     # Apply NMS
     pred = non_max_suppression(pred, 0.25, 0.45, classes=None, agnostic=False)
-    results = []
-    for det in pred[0]:
-        # det[:, :4] = scale_coords(img.shape[2:], det[:, :4], img_shape).round()
-        results.append(Result(det))
-        results[-1].normalise_coords((imgsz, imgsz, 3))
-    return results
+    # results = []
+
+    for det in pred:
+        # import pdb; pdb.set_trace()
+        det[:, :4] = scale_coords(img.shape[2:], det[:, :4], img_shape).round()
+
+    #     results.append(Result(det))
+    #     results[-1].normalise_coords((imgsz, imgsz, 3))
+
+    # return results
+
+    return pred
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
