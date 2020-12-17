@@ -171,7 +171,7 @@ class Result:
         _h = self.n_xyxy[3] - self.n_xyxy[1]
         self.percentage_of_screen = _w * _h * 100
 
-def detect_single(img=None, model=None):
+def detect_single(img=None, model=None, ret_res = False):
     device = select_device("cpu")
     half = device.type != 'cpu'  # half precision only supported on CUDA
     if type(img) == type(None):
@@ -200,18 +200,22 @@ def detect_single(img=None, model=None):
     pred = model(img, augment=False)[0]
     # Apply NMS
     pred = non_max_suppression(pred, 0.25, 0.45, classes=None, agnostic=False)
-    # results = []
+    results = []
 
     for det in pred:
         # import pdb; pdb.set_trace()
         det[:, :4] = scale_coords(img.shape[2:], det[:, :4], img_shape).round()
 
-    #     results.append(Result(det))
-    #     results[-1].normalise_coords((imgsz, imgsz, 3))
+        for d in det:
+            results.append(Result(d))
+            if ret_res:
+                results[-1].normalise_coords((imgsz, imgsz, 3))
 
-    # return results
+    if ret_res:
+        return results
+    else:
 
-    return pred
+        return pred
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
