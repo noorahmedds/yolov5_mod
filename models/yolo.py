@@ -31,7 +31,8 @@ class Detect(nn.Module):
     def __init__(self, nc=80, anchors=(), ch=()):  # detection layer
         super(Detect, self).__init__()
         self.nc = nc  # number of classes
-        self.no = nc + 5 + 1  # number of outputs per anchor. Where 3 is the number of dimensions for association vector
+        self.ad = 1   # Number of dimensions of embedding vector
+        self.no = nc + 5 + self.ad  # number of outputs per anchor. Where 3 is the number of dimensions for association vector
         self.nl = len(anchors)  # number of detection layers
         self.na = len(anchors[0]) // 2  # number of anchors
         self.grid = [torch.zeros(1)] * self.nl  # init grid

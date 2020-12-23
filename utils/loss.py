@@ -85,10 +85,21 @@ class QFocalLoss(nn.Module):
             return loss
 
 
-def compute_loss(p, targets, model):  # predictions, targets, model
+def pull_loss(predicted_embeddings, tcls, tasc):
+    """Returns pull loss by finding mean squared error between pairs of face and body
+
+    Args:
+        predicted_embeddings ([type]): [description]
+        tcls ([type]): [description]
+        tasc ([type]): [description]
+    """
+
+
+def compute_loss(p, targets, model, assocs):  # predictions, targets, model
     device = targets.device
     lcls, lbox, lobj = torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device)
-    tcls, tbox, indices, anchors = build_targets(p, targets, model)  # targets
+    tcls, tbox, indices, anchors, tasc = build_targets(p, targets, model, assocs)  # targets
+
     h = model.hyp  # hyperparameters
 
     # Define criteria
@@ -104,6 +115,8 @@ def compute_loss(p, targets, model):  # predictions, targets, model
     g = h['fl_gamma']  # focal loss gamma
     if g > 0:
         BCEcls, BCEobj = FocalLoss(BCEcls, g), FocalLoss(BCEobj, g)
+
+    predicted_embeddings = []
 
     # Losses
     nt = 0  # number of targets
@@ -134,13 +147,26 @@ def compute_loss(p, targets, model):  # predictions, targets, model
                 t[range(n), tcls[i]] = cp
                 lcls += BCEcls(ps[:, 5:], t)  # BCE
 
-            
+            # Pull loss
+            import pdb; pdb.set_trace()
+            # ps contains the predictions which correspond to the generated targets
+            # target classes are available in tcls[i]
+            # associations are available in 
+            # we need to concatenate all ps's into a long n,8 vector which will then be used to create push pull loss for associations
+            # traverse all pairs of the same person over all scales
+            # get ps[7] which is the embedding
+            # for all pairs calculate the following (((ef - ek)**2 + (ep - ek)**2) * 1/npairs) * 1/n_persons
+
+            # Push loss
+            predicted_embeddings.append(ps[:, 7])
 
             # Append targets to text file
             # with open('targets.txt', 'a') as file:
             #     [file.write('%11.5g ' * 4 % tuple(x) + '\n') for x in torch.cat((txy[i], twh[i]), 1)]
 
         lobj += BCEobj(pi[..., 4], tobj) * balance[i]  # obj loss
+
+    
 
     s = 3 / no  # output count scaling
     lbox *= h['box'] * s
@@ -152,14 +178,22 @@ def compute_loss(p, targets, model):  # predictions, targets, model
     return loss * bs, torch.cat((lbox, lobj, lcls, loss)).detach()
 
 
-def build_targets(p, targets, model):
+def build_targets(p, targets, model, assocs):
     # Build targets for compute_loss(), input targets(image,class,x,y,w,h)
     det = model.module.model[-1] if is_parallel(model) else model.model[-1]  # Detect() module
     na, nt = det.na, targets.shape[0]  # number of anchors, targets
-    tcls, tbox, indices, anch = [], [], [], []
-    gain = torch.ones(7, device=targets.device)  # normalized to gridspace gain
+
+    # tcls contains the classes per anchor per  
+    tcls, tbox, indices, anch, tasc = [], [], [], [], []
+
+    temb = []
+    gain = torch.ones(7 + 1, device=targets.device)  # normalized to gridspace gain
     ai = torch.arange(na, device=targets.device).float().view(na, 1).repeat(1, nt)  # same as .repeat_interleave(nt)
-    import pdb; pdb.set_trace()
+
+    # Appending associations directly to the targets here
+    targets = torch.cat((targets, assocs.view(-1,1)), 1)
+
+    # Repeat the targets 3 times for each indices and append the anchor pair indices to it for reference
     targets = torch.cat((targets.repeat(na, 1, 1), ai[:, :, None]), 2)  # append anchor indices
 
     g = 0.5  # bias
@@ -170,16 +204,28 @@ def build_targets(p, targets, model):
 
     for i in range(det.nl):
         anchors = det.anchors[i]
+
+        # Gain is used to denormalise the targets to the shape of the detect scale at which we are comparing to anchors
         gain[2:6] = torch.tensor(p[i].shape)[[3, 2, 3, 2]]  # xyxy gain
 
         # Match targets to anchors
+        # Targets are denormalised here
         t = targets * gain
+
         if nt:
             # Matches
             r = t[:, :, 4:6] / anchors[:, None]  # wh ratio
             j = torch.max(r, 1. / r).max(2)[0] < model.hyp['anchor_t']  # compare
             # j = wh_iou(anchors, t[:, 4:6]) > model.hyp['iou_t']  # iou(3,n)=wh_iou(anchors(3,2), gwh(n,2))
             t = t[j]  # filter
+
+            # The above does this in short
+                # width height ratio is calculated between all anchors at the given scale.
+                # If the widht to height of vice versa ratio is higher than the anchor threshold j for that index contains a True
+                # t at the end contains only targets which fit the given anchors at that scale.
+                # For example if you have 6 ground truths (6 x 6 matrix)
+                    # t would at this point be 3,6,6+1 where the gt is repeated and anchor index is appended to each ground truth
+                    # Once filtered t could look like the following  18,6 if all gt boxes were less than anchor_t ratio between the width and height 
 
             # Offsets
             gxy = t[:, 2:4]  # grid xy
@@ -202,11 +248,13 @@ def build_targets(p, targets, model):
         gi, gj = gij.T  # grid xy indices
 
         # Append
-        a = t[:, 6].long()  # anchor indices
+        asc = t[:, 6].long() # association numbers
+        a = t[:, 7].long()  # anchor indices
         indices.append((b, a, gj.clamp_(0, gain[3] - 1), gi.clamp_(0, gain[2] - 1)))  # image, anchor, grid indices
         tbox.append(torch.cat((gxy - gij, gwh), 1))  # box
         anch.append(anchors[a])  # anchors
         tcls.append(c)  # class
+        tasc.append(asc)
 
 
-    return tcls, tbox, indices, anch
+    return tcls, tbox, indices, anch, tasc

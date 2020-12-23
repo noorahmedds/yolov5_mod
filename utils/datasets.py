@@ -381,9 +381,10 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
 
         # Read cache
         cache.pop('hash')  # remove hash
-        labels, shapes = zip(*cache.values())
+        labels, shapes, l_assoc = zip(*cache.values())
         self.labels = list(labels)
         self.shapes = np.array(shapes, dtype=np.float64)
+        self.l_assoc = list(l_assoc)
         self.img_files = list(cache.keys())  # update
         self.label_files = img2label_paths(cache.keys())  # update
         if single_cls:
@@ -406,6 +407,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
             self.img_files = [self.img_files[i] for i in irect]
             self.label_files = [self.label_files[i] for i in irect]
             self.labels = [self.labels[i] for i in irect]
+            self.l_assoc = [self.l_assoc[i] for i in irect]
             self.shapes = s[irect]  # wh
             ar = ar[irect]
 
@@ -433,11 +435,12 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                 gb += self.imgs[i].nbytes
                 pbar.desc = 'Caching images (%.1fGB)' % (gb / 1E9)
 
-    def cache_labels(self, path=Path('./labels.cache')):
+    def cache_labels(self, path=Path('./labels.cache'), column_size = 5):
         # Cache dataset labels, check images and read shapes
         x = {}  # dict
         nm, nf, ne, nc = 0, 0, 0, 0  # number missing, found, empty, duplicate
         pbar = tqdm(zip(self.img_files, self.label_files), desc='Scanning images', total=len(self.img_files))
+
         for i, (im_file, lb_file) in enumerate(pbar):
             try:
                 # verify images
@@ -450,19 +453,26 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                 if os.path.isfile(lb_file):
                     nf += 1  # label found
                     with open(lb_file, 'r') as f:
+                        # Creating numpy array out of labels by splitting by line and spaces
                         l = np.array([x.split() for x in f.read().strip().splitlines()], dtype=np.float32)  # labels
                     if len(l):
-                        assert l.shape[1] == 5, 'labels require 5 columns each'
+                        # Remove the association label from l
+                        l_assoc = l[:, -1]
+                        l = l[:, :-1]
+
+                        assert l.shape[1] == column_size, 'labels require <column_size> columns each'
                         assert (l >= 0).all(), 'negative labels'
                         assert (l[:, 1:] <= 1).all(), 'non-normalized or out of bounds coordinate labels'
                         assert np.unique(l, axis=0).shape[0] == l.shape[0], 'duplicate labels'
                     else:
                         ne += 1  # label empty
-                        l = np.zeros((0, 5), dtype=np.float32)
+                        l = np.zeros((0, column_size), dtype=np.float32)
+                        l_assoc = np.zeros((0,1), dtype=np.float32)
                 else:
                     nm += 1  # label missing
-                    l = np.zeros((0, 5), dtype=np.float32)
-                x[im_file] = [l, shape]
+                    l = np.zeros((0, column_size), dtype=np.float32)
+                    l_assoc = np.zeros((0,1), dtype=np.float32)
+                x[im_file] = [l, shape, l_assoc]
             except Exception as e:
                 nc += 1
                 print('WARNING: Ignoring corrupted image and/or label %s: %s' % (im_file, e))
@@ -493,9 +503,11 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
 
         hyp = self.hyp
         mosaic = self.mosaic and random.random() < hyp['mosaic']
+        mosaic = False
         if mosaic:
             # Load mosaic
-            img, labels = load_mosaic(self, index)
+            # TODO: load mosaic should also now contain the associations from the self.l_association
+            img, labels, l_assocs = load_mosaic(self, index)
             shapes = None
 
             # MixUp https://arxiv.org/pdf/1710.09412.pdf
@@ -504,10 +516,10 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                 r = np.random.beta(8.0, 8.0)  # mixup ratio, alpha=beta=8.0
                 img = (img * r + img2 * (1 - r)).astype(np.uint8)
                 labels = np.concatenate((labels, labels2), 0)
-
         else:
             # Load image
             img, (h0, w0), (h, w) = load_image(self, index)
+            l_assocs = self.l_assoc[index]
 
             # Letterbox
             shape = self.batch_shapes[self.batch[index]] if self.rect else self.img_size  # final letterboxed shape
@@ -524,6 +536,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                 labels[:, 2] = ratio[1] * h * (x[:, 2] - x[:, 4] / 2) + pad[1]  # pad height
                 labels[:, 3] = ratio[0] * w * (x[:, 1] + x[:, 3] / 2) + pad[0]
                 labels[:, 4] = ratio[1] * h * (x[:, 2] + x[:, 4] / 2) + pad[1]
+
 
         if self.augment:
             # Augment imagespace
@@ -569,14 +582,16 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to 3x416x416
         img = np.ascontiguousarray(img)
 
-        return torch.from_numpy(img), labels_out, self.img_files[index], shapes
+        # We are return l_assocs as a numpy array because we don't need to perform any tensor operations on it. We only use it for reference purposes and to identify pairs of the person body and face.
+        return torch.from_numpy(img), labels_out, self.img_files[index], shapes, l_assocs
 
     @staticmethod
     def collate_fn(batch):
-        img, label, path, shapes = zip(*batch)  # transposed
+        img, label, path, shapes, assocs = zip(*batch)  # transposed
         for i, l in enumerate(label):
             l[:, 0] = i  # add target image index for build_targets()
-        return torch.stack(img, 0), torch.cat(label, 0), path, shapes
+        # import pdb; pdb.set_trace()
+        return torch.stack(img, 0), torch.cat(label, 0), path, shapes, assocs
 
 
 # Ancillary functions --------------------------------------------------------------------------------------------------
@@ -620,6 +635,8 @@ def load_mosaic(self, index):
     # loads images in a mosaic
 
     labels4 = []
+    l_assoc4 = []
+    assoc_offset = 0
     s = self.img_size
     yc, xc = [int(random.uniform(-x, 2 * s + x)) for x in self.mosaic_border]  # mosaic center x, y
     indices = [index] + [self.indices[random.randint(0, self.n - 1)] for _ in range(3)]  # 3 additional image indices
@@ -656,6 +673,14 @@ def load_mosaic(self, index):
             labels[:, 4] = h * (x[:, 2] + x[:, 4] / 2) + padh
         labels4.append(labels)
 
+        # Association labels
+        # TODO: Fix association labels such that only association labels left are those for bodies and face are still present
+        assoc_ = self.l_assoc[index]
+        if assoc_.size > 0:
+            assoc_ += assoc_offset
+            l_assoc4.append(assoc_)
+            assoc_offset += np.unique(assoc_).shape[0]
+
     # Concat/clip labels
     if len(labels4):
         labels4 = np.concatenate(labels4, 0)
@@ -671,7 +696,7 @@ def load_mosaic(self, index):
                                        perspective=self.hyp['perspective'],
                                        border=self.mosaic_border)  # border to remove
 
-    return img4, labels4
+    return img4, labels4, l_assoc4
 
 
 def replicate(img, labels):
