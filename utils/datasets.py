@@ -503,7 +503,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
 
         hyp = self.hyp
         mosaic = self.mosaic and random.random() < hyp['mosaic']
-        mosaic = False
+        # mosaic = False
         if mosaic:
             # Load mosaic
             # TODO: load mosaic should also now contain the associations from the self.l_association
@@ -537,11 +537,10 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                 labels[:, 3] = ratio[0] * w * (x[:, 1] + x[:, 3] / 2) + pad[0]
                 labels[:, 4] = ratio[1] * h * (x[:, 2] + x[:, 4] / 2) + pad[1]
 
-
         if self.augment:
             # Augment imagespace
             if not mosaic:
-                img, labels = random_perspective(img, labels,
+                img, labels, l_assocs = random_perspective(img, labels, l_assocs,
                                                  degrees=hyp['degrees'],
                                                  translate=hyp['translate'],
                                                  scale=hyp['scale'],
@@ -688,7 +687,10 @@ def load_mosaic(self, index):
         # img4, labels4 = replicate(img4, labels4)  # replicate
 
     # Augment
-    img4, labels4 = random_perspective(img4, labels4,
+    if len(l_assoc4):
+        l_assoc4 = np.hstack(l_assoc4)
+        
+    img4, labels4, l_assoc4 = random_perspective(img4, labels4, l_assoc4,
                                        degrees=self.hyp['degrees'],
                                        translate=self.hyp['translate'],
                                        scale=self.hyp['scale'],
@@ -749,7 +751,7 @@ def letterbox(img, new_shape=(640, 640), color=(114, 114, 114), auto=True, scale
     return img, ratio, (dw, dh)
 
 
-def random_perspective(img, targets=(), degrees=10, translate=.1, scale=.1, shear=10, perspective=0.0, border=(0, 0)):
+def random_perspective(img, targets=(), l_assocs = (), degrees=10, translate=.1, scale=.1, shear=10, perspective=0.0, border=(0, 0)):
     # torchvision.transforms.RandomAffine(degrees=(-10, 10), translate=(.1, .1), scale=(.9, 1.1), shear=(-10, 10))
     # targets = [cls, xyxy]
 
@@ -830,10 +832,12 @@ def random_perspective(img, targets=(), degrees=10, translate=.1, scale=.1, shea
 
         # filter candidates
         i = box_candidates(box1=targets[:, 1:5].T * s, box2=xy.T)
+        
+        l_assocs = l_assocs[i]
         targets = targets[i]
         targets[:, 1:5] = xy[i]
 
-    return img, targets
+    return img, targets, l_assocs
 
 
 def box_candidates(box1, box2, wh_thr=2, ar_thr=20, area_thr=0.1):  # box1(4,n), box2(4,n)
