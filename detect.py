@@ -14,6 +14,16 @@ from utils.general import check_img_size, non_max_suppression, apply_classifier,
 from utils.plots import plot_one_box
 from utils.torch_utils import select_device, load_classifier, time_synchronized
 
+def match_body_parts(predictions):
+    """Takes the predictions from the model and returns pairs of indices which are associated together. For example pred[0] and pred[2] could be the same person and pred[1] maybe a single body. The output would be [(0,2), (1,)]
+
+    Args:
+        predictions ([type]): Yolo output
+    """
+
+
+    return
+
 
 def detect(save_img=False):
     source, weights, view_img, save_txt, imgsz = opt.source, opt.weights, opt.view_img, opt.save_txt, opt.img_size
@@ -73,6 +83,8 @@ def detect(save_img=False):
         # Apply NMS
         pred = non_max_suppression(pred, opt.conf_thres, opt.iou_thres, classes=opt.classes, agnostic=opt.agnostic_nms)
         t2 = time_synchronized()
+
+        # On the predictions get the final embedding vector and match between pair if exist
 
         # Apply Classifier
         if classify:

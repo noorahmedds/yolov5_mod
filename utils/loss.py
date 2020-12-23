@@ -94,6 +94,7 @@ def pull_loss(predicted_embeddings, tcls, tasc, device):
         tasc ([type]): [description]
     """
 
+
     predicted_embeddings_ = torch.cat(predicted_embeddings)
     tcls_ = torch.cat(tcls)
     tasc_ = torch.cat(tasc)
@@ -128,7 +129,8 @@ def pull_loss(predicted_embeddings, tcls, tasc, device):
 
         all_loss += person_loss
     
-    all_loss /= person_ids.shape[0]
+    if person_ids.shape[0] != 0:
+        all_loss /= person_ids.shape[0]
     
     return all_loss
 
@@ -146,9 +148,11 @@ def push_loss(predicted_embeddings, tcls, tasc, device, delta=1):
 
     person_ids = tasc_.unique()
 
-
     all_loss = torch.zeros(1, device=device)
     pair_count = 0
+
+    traversed_pair = set()
+
     for ci in person_ids:
         # Current person
 
@@ -161,6 +165,12 @@ def push_loss(predicted_embeddings, tcls, tasc, device, delta=1):
         c_person_embeddings = predicted_embeddings_[c_indices] # Predicted embeddings for this person
 
         for oi in person_ids:
+            if (ci, oi) in traversed_pair or (oi,ci) in traversed_pair:
+                # If pair already contributed to loss don't traverse it again
+                continue
+
+            traversed_pair.add((ci, oi))
+
             # Other person
             if ci == oi:
                 continue
@@ -190,7 +200,7 @@ def push_loss(predicted_embeddings, tcls, tasc, device, delta=1):
     return all_loss
 
 
-def compute_loss(p, targets, model, assocs):  # predictions, targets, model
+def compute_loss(p, targets, model, assocs, compute_embedding_loss = False):  # predictions, targets, model
     device = targets.device
     lcls, lbox, lobj = torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device)
     lpull, lpush = torch.zeros(1, device=device), torch.zeros(1, device=device)
@@ -251,8 +261,8 @@ def compute_loss(p, targets, model, assocs):  # predictions, targets, model
             # traverse all pairs of the same person over all scales
             # get ps[7] which is the embedding
             # for all pairs calculate the following (((ef - ek)**2 + (ep - ek)**2) * 1/npairs) * 1/n_persons
-
             # Push loss
+
             predicted_embeddings.append(ps[:, 7])
 
             # Append targets to text file
@@ -261,9 +271,11 @@ def compute_loss(p, targets, model, assocs):  # predictions, targets, model
 
         lobj += BCEobj(pi[..., 4], tobj) * balance[i]  # obj loss
 
-    if targets.shape[0]:
+    # Lets start effecting weights to the pull push loss once our box and objectness loss is below a particular threshold
+    if targets.shape[0] and compute_embedding_loss and len(predicted_embeddings):
         lpull += pull_loss(predicted_embeddings, tcls, tasc, device)
         lpush += push_loss(predicted_embeddings, tcls, tasc, device)
+        # pass
 
     s = 3 / no  # output count scaling
     lbox *= h['box'] * s
