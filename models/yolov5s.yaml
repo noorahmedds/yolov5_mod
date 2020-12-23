@@ -46,3 +46,10 @@ head:
 
    [[17, 20, 23], 1, Detect, [nc, anchors]],  # Detect(P3, P4, P5)
   ]
+
+# Add classifier head here
+# age_head:
+#   [[10, 1, Conv, [512, 1, 1]], 
+#   ...
+#   ...
+#   ]

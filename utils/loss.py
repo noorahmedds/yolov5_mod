@@ -183,8 +183,9 @@ def push_loss(predicted_embeddings, tcls, tasc, device, delta=1):
 
                     all_loss += max(0, delta-abs(c_e - o_e))
 
-    if pair_count != 0:
-        all_loss /= pair_count
+    d = (pair_count * (pair_count - 1))
+    if d != 0:
+        all_loss /= d
 
     return all_loss
 

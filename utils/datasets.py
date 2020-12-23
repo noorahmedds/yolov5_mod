@@ -503,7 +503,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
 
         hyp = self.hyp
         mosaic = self.mosaic and random.random() < hyp['mosaic']
-        # mosaic = False
+        
         if mosaic:
             # Load mosaic
             # TODO: load mosaic should also now contain the associations from the self.l_association
@@ -689,7 +689,7 @@ def load_mosaic(self, index):
     # Augment
     if len(l_assoc4):
         l_assoc4 = np.hstack(l_assoc4)
-        
+
     img4, labels4, l_assoc4 = random_perspective(img4, labels4, l_assoc4,
                                        degrees=self.hyp['degrees'],
                                        translate=self.hyp['translate'],
