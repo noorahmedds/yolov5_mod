@@ -111,29 +111,30 @@ def pull_loss(predicted_embeddings, tcls, tasc, device):
         body_indices = torch.where(person_cls == 0)[0]
 
         # ====== Mean Loss ========
-        body_embeddings = person_embeddings[body_indices]
-        face_embeddings = person_embeddings[faces_indices]
-        if 0 not in face_embeddings.shape and 0 not in body_embeddings.shape:
-            all_loss += torch.abs(body_embeddings.mean() - face_embeddings.mean())
+        # body_embeddings = person_embeddings[body_indices]
+        # face_embeddings = person_embeddings[faces_indices]
+        # if 0 not in face_embeddings.shape and 0 not in body_embeddings.shape:
+        #     all_loss += torch.abs(body_embeddings.mean() - face_embeddings.mean())
         # ====== Mean Loss ========
 
-        # Original Loss
-        # # for each body traverse all faces and get embeddings
-        # person_loss = torch.zeros(1, device=device)
-        # pair_count = 0
-        # for bi in body_indices:
-        #     e_body = person_embeddings[bi]
-        #     for fi in faces_indices:
-        #         e_face = person_embeddings[fi]
+        # Original Loss ===========
+        # for each body traverse all faces and get embeddings
+        person_loss = torch.zeros(1, device=device)
+        pair_count = 0
+        for bi in body_indices:
+            e_body = person_embeddings[bi]
+            for fi in faces_indices:
+                e_face = person_embeddings[fi]
 
-        #         ek = (e_body + e_face) / 2 # ek is the average of the two embeddings
-        #         person_loss += (e_face - ek)**2 + (e_body - ek)**2
-        #         pair_count += 1
+                ek = (e_body + e_face) / 2 # ek is the average of the two embeddings
+                person_loss += (e_face - ek)**2 + (e_body - ek)**2
+                pair_count += 1
         
-        # if pair_count != 0:
-        #     person_loss /= pair_count
+        if pair_count != 0:
+            person_loss /= pair_count
 
-        # all_loss += person_loss
+        all_loss += person_loss
+        # Original Loss ===========
     
     if person_ids.shape[0] != 0:
         all_loss /= person_ids.shape[0]
@@ -145,14 +146,9 @@ def nCr(n,r):
     f = math.factorial
     return f(n) / f(r) / f(n-r)
 
+from itertools import combinations
+
 def push_loss(predicted_embeddings, tcls, tasc, device, delta=1):
-    # Seperate all persons
-    # For each person who is not the current person
-    # Traverse all pairs of body and face
-    # Calculate push loss
-
-    # import pdb; pdb.set_trace()
-
     predicted_embeddings_ = torch.cat(predicted_embeddings)
     tcls_ = torch.cat(tcls)
     tasc_ = torch.cat(tasc)
@@ -162,39 +158,59 @@ def push_loss(predicted_embeddings, tcls, tasc, device, delta=1):
     all_loss = torch.zeros(1, device=device)
     pair_count = 0
 
-    traversed_pair = set()
+    if person_ids.shape[0] > 1: # Need more than one person to calculate push loss
+        for pair in combinations(person_ids, 2): # Creating combinations
+            ci = pair[0]
+            oi = pair[1]
 
-    for ci in person_ids:
-        # Current person
-
-        c_indices = torch.where(tasc_ == ci)
-        if 0 in c_indices[0].shape:
-            continue
-
-
-        c_person_cls = tcls_[c_indices] # Classes from target for this person
-        c_person_embeddings = predicted_embeddings_[c_indices] # Predicted embeddings for this person
-
-        for oi in person_ids:
-            if (ci, oi) in traversed_pair or (oi,ci) in traversed_pair:
-                # If pair already contributed to loss don't traverse it again
-                continue
-
-            traversed_pair.add((ci, oi))
-
-            # Other person
-            if ci == oi:
-                continue
+            c_indices = torch.where(tasc_ == ci)
+            if 0 in c_indices[0].shape: continue
+            c_person_cls = tcls_[c_indices] # Classes from target for this person
+            c_person_embeddings = predicted_embeddings_[c_indices] # Predicted embeddings for this person
 
             o_indices = torch.where(tasc_ == oi)
-            if 0 in o_indices[0].shape:
-                continue
-
+            if 0 in o_indices[0].shape: continue
             o_person_cls = tcls_[o_indices] # Classes from target for this person
             o_person_embeddings = predicted_embeddings_[o_indices] # Predicted embeddings for this person
 
-            # import pdb; pdb.set_trace()
             all_loss += torch.max(torch.zeros(1, device=device), 1 - torch.abs(c_person_embeddings.mean() - o_person_embeddings.mean()))
+
+        den = nCr(person_ids.shape[0],2)
+        all_loss /= den
+
+    # traversed_pair = set()
+
+    # for ci in person_ids:
+    #     # Current person
+
+    #     c_indices = torch.where(tasc_ == ci)
+    #     if 0 in c_indices[0].shape:
+    #         continue
+
+
+    #     c_person_cls = tcls_[c_indices] # Classes from target for this person
+    #     c_person_embeddings = predicted_embeddings_[c_indices] # Predicted embeddings for this person
+
+    #     for oi in person_ids:
+    #         if (ci, oi) in traversed_pair or (oi,ci) in traversed_pair:
+    #             # If pair already contributed to loss don't traverse it again
+    #             continue
+
+    #         traversed_pair.add((ci, oi))
+
+    #         # Other person
+    #         if ci == oi:
+    #             continue
+
+    #         o_indices = torch.where(tasc_ == oi)
+    #         if 0 in o_indices[0].shape:
+    #             continue
+
+    #         o_person_cls = tcls_[o_indices] # Classes from target for this person
+    #         o_person_embeddings = predicted_embeddings_[o_indices] # Predicted embeddings for this person
+
+    #         # import pdb; pdb.set_trace()
+    #         all_loss += torch.max(torch.zeros(1, device=device), 1 - torch.abs(c_person_embeddings.mean() - o_person_embeddings.mean()))
 
             # for c_idx, c_part in enumerate(c_person_cls):
             #     c_e = c_person_embeddings[c_idx]
@@ -207,11 +223,10 @@ def push_loss(predicted_embeddings, tcls, tasc, device, delta=1):
 
             #         all_loss += max(0, delta-abs(c_e - o_e))
 
-    # d = (pair_count * (pair_count - 1))
-    if person_ids.shape[0] > 1:
-        # The denominator should be the number of combinations formed from the list of unique persons
-        den = nCr(person_ids.shape[0],2)
-        all_loss /= den
+    # if person_ids.shape[0] > 1:
+    #     # The denominator should be the number of combinations formed from the list of unique persons
+    #     den = nCr(person_ids.shape[0],2)
+    #     all_loss /= den
 
     return all_loss
 

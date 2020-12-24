@@ -259,6 +259,7 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
         save.extend(x % i for x in ([f] if isinstance(f, int) else f) if x != -1)  # append to savelist
         layers.append(m_)
         ch.append(c2)
+
     return nn.Sequential(*layers), sorted(save)
 
 
