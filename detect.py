@@ -10,19 +10,9 @@ from numpy import random, ascontiguousarray
 from models.experimental import attempt_load
 from utils.datasets import LoadStreams, LoadImages, letterbox
 from utils.general import check_img_size, non_max_suppression, apply_classifier, scale_coords, xyxy2xywh, \
-    strip_optimizer, set_logging, increment_path
+    strip_optimizer, set_logging, increment_path, associate_predictions
 from utils.plots import plot_one_box
 from utils.torch_utils import select_device, load_classifier, time_synchronized
-
-def match_body_parts(predictions):
-    """Takes the predictions from the model and returns pairs of indices which are associated together. For example pred[0] and pred[2] could be the same person and pred[1] maybe a single body. The output would be [(0,2), (1,)]
-
-    Args:
-        predictions ([type]): Yolo output
-    """
-
-
-    return
 
 
 def detect(save_img=False):
@@ -84,7 +74,8 @@ def detect(save_img=False):
         pred = non_max_suppression(pred, opt.conf_thres, opt.iou_thres, classes=opt.classes, agnostic=opt.agnostic_nms)
         t2 = time_synchronized()
 
-        # On the predictions get the final embedding vector and match between pair if exist
+        # Association
+        pred = associate_predictions(pred)
 
         # Apply Classifier
         if classify:
@@ -106,12 +97,12 @@ def detect(save_img=False):
                 det[:, :4] = scale_coords(img.shape[2:], det[:, :4], im0.shape).round()
 
                 # Print results
-                for c in det[:, -1].unique():
-                    n = (det[:, -1] == c).sum()  # detections per class
+                for c in det[:, -2].unique():
+                    n = (det[:, -2] == c).sum()  # detections per class
                     s += '%g %ss, ' % (n, names[int(c)])  # add to string
 
                 # Write results
-                for *xyxy, conf, cls in reversed(det):
+                for *xyxy, conf, cls, assoc_body_idx in reversed(det):
                     if save_txt:  # Write to file
                         xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
                         line = (cls, *xywh, conf) if opt.save_conf else (cls, *xywh)  # label format
@@ -120,7 +111,13 @@ def detect(save_img=False):
 
                     if save_img or view_img:  # Add bbox to image
                         label = '%s %.2f' % (names[int(cls)], conf)
-                        plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=3)
+
+                        body_xyxy = None
+                        # import pdb; pdb.set_trace()
+                        if names[int(cls)] == "face" and int(assoc_body_idx) != -1:
+                            *body_xyxy, _, _, _ = det[int(assoc_body_idx)]
+
+                        plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=3, body_xyxy=body_xyxy)
 
             # Print time (inference + NMS)
             print('%sDone. (%.3fs)' % (s, t2 - t1))

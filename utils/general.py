@@ -257,15 +257,64 @@ def wh_iou(wh1, wh2):
     inter = torch.min(wh1, wh2).prod(2)  # [N,M]
     return inter / (wh1.prod(2) + wh2.prod(2) - inter)  # iou = inter / (area1 + area2 - inter)
 
+from scipy.spatial import distance
+
+def associate_predictions(prediction, body_label = 0, face_label = 1, delta = 10):
+    """Performs associations between faces and bodies based on the embedding vector
+
+    Returns:
+        detections wih shape: nx7 (x1, y1, x2, y2, conf, cls, association_index) and also sorted by body
+    """
+
+    # Each detection will have an association index. No two bodies or faces can have the same association index
+    # A face cannot be associated to two bodies
+    # A body may not have a face
+    output = []
+
+    for pred in prediction:
+        b_emb = pred[pred[:, -2] == body_label][:, -1, None]
+        f_emb = pred[pred[:, -2] == face_label][:, -1, None]
+
+        if 0 in f_emb.shape or 0 in b_emb.shape:
+            break
+        # import pdb; pdb.set_trace()
+        pred = torch.cat((pred[pred[:, -2] == body_label]
+                        ,pred[pred[:, -2] == face_label]), 0)
+
+        # import pdb; pdb.set_trace()
+        dist_matrix = distance.cdist(b_emb.cpu(), f_emb.cpu())
+
+        # Because a face has to be associated with a body. We choose to minimise the face column. 
+        # Now for f[0] the best body is argmin(b_emb[0])
+        associated_bodies = set()
+        face_idx = 0
+        for i, p in enumerate(pred):
+            if p[-2] == body_label:
+                continue
+
+            min_body_idx = np.argmin(dist_matrix[:, face_idx])
+            if min_body_idx not in associated_bodies: 
+                # TODO: Add body and face iou check
+                
+                p[-1] = min_body_idx
+                associated_bodies.add(min_body_idx)
+            else:
+                p[-1] = -1
+
+            face_idx += 1
+
+        output.append(pred)
+
+    return output
 
 def non_max_suppression(prediction, conf_thres=0.1, iou_thres=0.6, classes=None, agnostic=False, labels=()):
     """Performs Non-Maximum Suppression (NMS) on inference results
 
     Returns:
-         detections with shape: nx6 (x1, y1, x2, y2, conf, cls)
+         detections with shape: nx7 (x1, y1, x2, y2, conf, cls, embedding)
     """
 
-    nc = prediction[0].shape[1] - 5  # number of classes
+    nc = prediction[0].shape[1] - (5 + 1)  # number of classes
     xc = prediction[..., 4] > conf_thres  # candidates
 
     # Settings
@@ -278,7 +327,7 @@ def non_max_suppression(prediction, conf_thres=0.1, iou_thres=0.6, classes=None,
 
     t = time.time()
     output = [torch.zeros(0, 6)] * prediction.shape[0]
-    for xi, x in enumerate(prediction):  # image index, image inference
+    for xi, x in enumerate(prediction):  # image index, image inference # bacth wise
         # Apply constraints
         # x[((x[..., 2:4] < min_wh) | (x[..., 2:4] > max_wh)).any(1), 4] = 0  # width-height
         x = x[xc[xi]]  # confidence
@@ -297,17 +346,19 @@ def non_max_suppression(prediction, conf_thres=0.1, iou_thres=0.6, classes=None,
             continue
 
         # Compute conf
-        x[:, 5:] *= x[:, 4:5]  # conf = obj_conf * cls_conf
+        x[:, 5:-1] *= x[:, 4:5]  # conf = cls_conf * obj_conf
 
         # Box (center x, center y, width, height) to (x1, y1, x2, y2)
         box = xywh2xyxy(x[:, :4])
 
         # Detections matrix nx6 (xyxy, conf, cls)
         if multi_label:
-            i, j = (x[:, 5:] > conf_thres).nonzero(as_tuple=False).T
-            x = torch.cat((box[i], x[i, j + 5, None], j[:, None].float()), 1)
+            i, j = (x[:, 5:-1] > conf_thres).nonzero(as_tuple=False).T # Non zero indexes per column
+            x = torch.cat((box[i], x[i, j + 5, None], j[:, None].float(), x[i, -1, None]), 1) # *bbox, class_score, class_label, embedding 
+            # x = torch.cat((box[i], x[i, j + 5, None], j[:, None].float()), 1) # *bbox, class_score, class_label, embedding 
+
         else:  # best class only
-            conf, j = x[:, 5:].max(1, keepdim=True)
+            conf, j = x[:, 5:-1].max(1, keepdim=True)
             x = torch.cat((box, conf, j.float()), 1)[conf.view(-1) > conf_thres]
 
         # Filter by class
@@ -345,7 +396,6 @@ def non_max_suppression(prediction, conf_thres=0.1, iou_thres=0.6, classes=None,
             break  # time limit exceeded
 
     return output
-
 
 def strip_optimizer(f='weights/best.pt', s=''):  # from utils.general import *; strip_optimizer()
     # Strip optimizer from 'f' to finalize training, optionally save as 's'
