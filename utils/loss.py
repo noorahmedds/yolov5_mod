@@ -190,11 +190,12 @@ def push_loss(predicted_embeddings, tcls, tasc, device, delta=1):
 
                 c_indices = torch.where(tasc_ == ci)
                 if 0 in c_indices[0].shape: continue
-                c_person_cls = tcls_[c_indices] # Classes from target for this person
-                c_person_embeddings = predicted_embeddings_[c_indices] # Predicted embeddings for this person
-
+                
                 o_indices = torch.where(tasc_ == oi)
                 if 0 in o_indices[0].shape: continue
+
+                c_person_cls = tcls_[c_indices] # Classes from target for this person
+                c_person_embeddings = predicted_embeddings_[c_indices] # Predicted embeddings for this person
                 o_person_cls = tcls_[o_indices] # Classes from target for this person
                 o_person_embeddings = predicted_embeddings_[o_indices] # Predicted embeddings for this person
 
