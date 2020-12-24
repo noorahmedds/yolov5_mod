@@ -140,6 +140,11 @@ def pull_loss(predicted_embeddings, tcls, tasc, device):
     
     return all_loss
 
+import math
+def nCr(n,r):
+    f = math.factorial
+    return f(n) / f(r) / f(n-r)
+
 def push_loss(predicted_embeddings, tcls, tasc, device, delta=1):
     # Seperate all persons
     # For each person who is not the current person
@@ -203,8 +208,10 @@ def push_loss(predicted_embeddings, tcls, tasc, device, delta=1):
             #         all_loss += max(0, delta-abs(c_e - o_e))
 
     # d = (pair_count * (pair_count - 1))
-    if person_ids.shape[0] != 0:
-        all_loss /= person_ids.shape[0]
+    if person_ids.shape[0] > 1:
+        # The denominator should be the number of combinations formed from the list of unique persons
+        den = nCr(person_ids.shape[0],2)
+        all_loss /= den
 
     return all_loss
 
@@ -262,15 +269,6 @@ def compute_loss(p, targets, model, assocs, compute_embedding_loss = False, alph
                 t[range(n), tcls[i]] = cp
                 lcls += BCEcls(ps[:, 5:], t)  # BCE
 
-            # Pull loss
-            # ps contains the predictions which correspond to the generated targets
-            # target classes are available in tcls[i]
-            # associations are available in 
-            # we need to concatenate all ps's into a long n,8 vector which will then be used to create push pull loss for associations
-            # traverse all pairs of the same person over all scales
-            # get ps[7] which is the embedding
-            # for all pairs calculate the following (((ef - ek)**2 + (ep - ek)**2) * 1/npairs) * 1/n_persons
-            # Push loss
 
             predicted_embeddings.append(ps[:, 7])
 
@@ -282,8 +280,8 @@ def compute_loss(p, targets, model, assocs, compute_embedding_loss = False, alph
 
     # Lets start effecting weights to the pull push loss once our box and objectness loss is below a particular threshold
     if targets.shape[0] and compute_embedding_loss and len(predicted_embeddings):
-        lpull += pull_loss(predicted_embeddings, tcls, tasc, device)
-        lpush += alpha * push_loss(predicted_embeddings, tcls, tasc, device)
+        lpull += alpha * pull_loss(predicted_embeddings, tcls, tasc, device)
+        lpush += alpha * push_loss(predicted_embeddings, tcls, tasc, device) # Alpha from the corner net paper
         # pass
 
     s = 3 / no  # output count scaling
@@ -294,7 +292,6 @@ def compute_loss(p, targets, model, assocs, compute_embedding_loss = False, alph
 
     loss = lbox + lobj + lcls + lpull + lpush
     return loss * bs, torch.cat((lbox, lobj, lcls, loss, lpull, lpush)).detach()
-
 
 def build_targets(p, targets, model, assocs):
     # Build targets for compute_loss(), input targets(image,class,x,y,w,h)
