@@ -581,16 +581,20 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to 3x416x416
         img = np.ascontiguousarray(img)
 
+        # Cat associations with he labels
+        labels_out = torch.cat((labels_out, torch.tensor(l_assocs).view(-1,1)), 1)
+
         # We are return l_assocs as a numpy array because we don't need to perform any tensor operations on it. We only use it for reference purposes and to identify pairs of the person body and face.
-        return torch.from_numpy(img), labels_out, self.img_files[index], shapes, l_assocs
+        return torch.from_numpy(img), labels_out, self.img_files[index], shapes
 
     @staticmethod
     def collate_fn(batch):
-        img, label, path, shapes, assocs = zip(*batch)  # transposed
+        img, label, path, shapes = zip(*batch)  # transposed
         for i, l in enumerate(label):
             l[:, 0] = i  # add target image index for build_targets()
         # import pdb; pdb.set_trace()
-        return torch.stack(img, 0), torch.cat(label, 0), path, shapes, assocs
+
+        return torch.stack(img, 0), torch.cat(label, 0), path, shapes
 
 
 # Ancillary functions --------------------------------------------------------------------------------------------------

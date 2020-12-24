@@ -95,49 +95,63 @@ def pull_loss(predicted_embeddings, tcls, tasc, device):
     """
 
 
-    predicted_embeddings_ = torch.cat(predicted_embeddings)
-    tcls_ = torch.cat(tcls)
-    tasc_ = torch.cat(tasc)
-
-    person_ids = tasc_.unique()
-
+    # Concatenating all targets from multiple detection layers just to make calculation easier
+    # It shouldnt matter to the calculation anyways
+    predicted_embeddings_all = torch.cat(predicted_embeddings)
+    tcls_all = torch.cat(tcls)
+    tasc_all = torch.cat(tasc) # embedding, batch Note: An embedding should be compared only with its batch mates
+    batches = tasc_all[:,-1].unique()
     all_loss = torch.zeros(1, device=device)
-    for id in person_ids:
-        indices = torch.where(tasc_ == id)
-        person_cls = tcls_[indices] # Classes from target for this person
-        person_embeddings = predicted_embeddings_[indices] # Predicted embeddings for this person
-
-        faces_indices = torch.where(person_cls == 1)[0]
-        body_indices = torch.where(person_cls == 0)[0]
-
-        # ====== Mean Loss ========
-        # body_embeddings = person_embeddings[body_indices]
-        # face_embeddings = person_embeddings[faces_indices]
-        # if 0 not in face_embeddings.shape and 0 not in body_embeddings.shape:
-        #     all_loss += torch.abs(body_embeddings.mean() - face_embeddings.mean())
-        # ====== Mean Loss ========
-
-        # Original Loss ===========
-        # for each body traverse all faces and get embeddings
-        person_loss = torch.zeros(1, device=device)
-        pair_count = 0
-        for bi in body_indices:
-            e_body = person_embeddings[bi]
-            for fi in faces_indices:
-                e_face = person_embeddings[fi]
-
-                ek = (e_body + e_face) / 2 # ek is the average of the two embeddings
-                person_loss += (e_face - ek)**2 + (e_body - ek)**2
-                pair_count += 1
-        
-        if pair_count != 0:
-            person_loss /= pair_count
-
-        all_loss += person_loss
-        # Original Loss ===========
     
-    if person_ids.shape[0] != 0:
-        all_loss /= person_ids.shape[0]
+    n_persons = 0
+    # Traverse Batches first
+    for batch in batches:
+        batch_indices = torch.where(tasc_all[:, -1] == batch)
+
+        person_ids = tasc_all[batch_indices][:, 0].unique()
+
+        predicted_embeddings_ = predicted_embeddings_all[batch_indices]
+        tcls_ = tcls_all[batch_indices]
+        tasc_ = tasc_all[batch_indices][:, 0]
+        
+        # Traverse Person ids in that batch
+        for id in person_ids:
+            indices = torch.where(tasc_ == id)
+            person_cls = tcls_[indices] # Classes from target for this person
+            person_embeddings = predicted_embeddings_[indices] # Predicted embeddings for this person
+
+            faces_indices = torch.where(person_cls == 1)[0]
+            body_indices = torch.where(person_cls == 0)[0]
+
+            # ====== Mean Loss ========
+            # body_embeddings = person_embeddings[body_indices]
+            # face_embeddings = person_embeddings[faces_indices]
+            # if 0 not in face_embeddings.shape and 0 not in body_embeddings.shape:
+            #     all_loss += torch.abs(body_embeddings.mean() - face_embeddings.mean())
+            # ====== Mean Loss ========
+
+            # Original Loss ===========
+            # for each body traverse all faces and get embeddings
+            person_loss = torch.zeros(1, device=device)
+            pair_count = 0
+            for bi in body_indices:
+                e_body = person_embeddings[bi]
+                for fi in faces_indices:
+                    e_face = person_embeddings[fi]
+
+                    ek = (e_body + e_face) / 2 # ek is the average of the two embeddings
+                    person_loss += (e_face - ek)**2 + (e_body - ek)**2
+                    pair_count += 1
+            
+            if pair_count != 0:
+                person_loss /= pair_count
+
+            all_loss += person_loss
+            # Original Loss ===========
+        n_persons += person_ids.shape[0]
+
+    if n_persons != 0:
+        all_loss /= n_persons
     
     return all_loss
 
@@ -149,34 +163,48 @@ def nCr(n,r):
 from itertools import combinations
 
 def push_loss(predicted_embeddings, tcls, tasc, device, delta=1):
-    predicted_embeddings_ = torch.cat(predicted_embeddings)
-    tcls_ = torch.cat(tcls)
-    tasc_ = torch.cat(tasc)
-
-    person_ids = tasc_.unique()
-
+    # Concatenating all targets from multiple detection layers just to make calculation easier
+    # It shouldnt matter to the calculation anyways
+    predicted_embeddings_all = torch.cat(predicted_embeddings)
+    tcls_all = torch.cat(tcls)
+    tasc_all = torch.cat(tasc) # embedding, batch Note: An embedding should be compared only with its batch mates
+    batches = tasc_all[:,-1].unique()
     all_loss = torch.zeros(1, device=device)
-    pair_count = 0
 
-    if person_ids.shape[0] > 1: # Need more than one person to calculate push loss
-        for pair in combinations(person_ids, 2): # Creating combinations
-            ci = pair[0]
-            oi = pair[1]
 
-            c_indices = torch.where(tasc_ == ci)
-            if 0 in c_indices[0].shape: continue
-            c_person_cls = tcls_[c_indices] # Classes from target for this person
-            c_person_embeddings = predicted_embeddings_[c_indices] # Predicted embeddings for this person
+    combination_count = 0
+    # Traverse Batches first
+    for batch in batches:
+        batch_indices = torch.where(tasc_all[:, -1] == batch)
 
-            o_indices = torch.where(tasc_ == oi)
-            if 0 in o_indices[0].shape: continue
-            o_person_cls = tcls_[o_indices] # Classes from target for this person
-            o_person_embeddings = predicted_embeddings_[o_indices] # Predicted embeddings for this person
+        predicted_embeddings_ = predicted_embeddings_all[batch_indices]
+        tcls_ = tcls_all[batch_indices]
+        tasc_ = tasc_all[batch_indices][:, 0]
+        person_ids = tasc_all[batch_indices][:, 0].unique()
 
-            all_loss += torch.max(torch.zeros(1, device=device), 1 - torch.abs(c_person_embeddings.mean() - o_person_embeddings.mean()))
 
-        den = nCr(person_ids.shape[0],2)
-        all_loss /= den
+        if person_ids.shape[0] > 1: # Need more than one person to calculate push loss
+            for pair in combinations(person_ids, 2): # Creating combinations
+                ci = pair[0]
+                oi = pair[1]
+
+                c_indices = torch.where(tasc_ == ci)
+                if 0 in c_indices[0].shape: continue
+                c_person_cls = tcls_[c_indices] # Classes from target for this person
+                c_person_embeddings = predicted_embeddings_[c_indices] # Predicted embeddings for this person
+
+                o_indices = torch.where(tasc_ == oi)
+                if 0 in o_indices[0].shape: continue
+                o_person_cls = tcls_[o_indices] # Classes from target for this person
+                o_person_embeddings = predicted_embeddings_[o_indices] # Predicted embeddings for this person
+
+                all_loss += torch.max(torch.zeros(1, device=device), 1 - torch.abs(c_person_embeddings.mean() - o_person_embeddings.mean()))
+
+            den = nCr(person_ids.shape[0],2)
+            combination_count += den
+
+    if combination_count > 0:
+        all_loss /= combination_count
 
     # traversed_pair = set()
 
@@ -231,19 +259,18 @@ def push_loss(predicted_embeddings, tcls, tasc, device, delta=1):
     return all_loss
 
 
-def compute_loss(p, targets, model, assocs, compute_embedding_loss = False, alpha = 0.1):  # predictions, targets, model
+def compute_loss(p, targets, model, compute_embedding_loss = False, alpha = 0.1):  # predictions, targets, model
     device = targets.device
     lcls, lbox, lobj = torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device)
     lpull, lpush = torch.zeros(1, device=device), torch.zeros(1, device=device)
-    tcls, tbox, indices, anchors, tasc = build_targets(p, targets, model, assocs)  # targets
+    tcls, tbox, indices, anchors, tasc = build_targets(p, targets, model)  # targets
+
 
     h = model.hyp  # hyperparameters
 
     # Define criteria
     BCEcls = nn.BCEWithLogitsLoss(pos_weight=torch.Tensor([h['cls_pw']])).to(device)
     BCEobj = nn.BCEWithLogitsLoss(pos_weight=torch.Tensor([h['obj_pw']])).to(device)
-
-    # Add another association loss here
 
     # Class label smoothing https://arxiv.org/pdf/1902.04103.pdf eqn 3
     cp, cn = smooth_BCE(eps=0.0)
@@ -284,7 +311,7 @@ def compute_loss(p, targets, model, assocs, compute_embedding_loss = False, alph
                 t[range(n), tcls[i]] = cp
                 lcls += BCEcls(ps[:, 5:], t)  # BCE
 
-
+            # Place predicted embeddings in respective batches
             predicted_embeddings.append(ps[:, 7])
 
             # Append targets to text file
@@ -308,7 +335,7 @@ def compute_loss(p, targets, model, assocs, compute_embedding_loss = False, alph
     loss = lbox + lobj + lcls + lpull + lpush
     return loss * bs, torch.cat((lbox, lobj, lcls, loss, lpull, lpush)).detach()
 
-def build_targets(p, targets, model, assocs):
+def build_targets(p, targets, model):
     # Build targets for compute_loss(), input targets(image,class,x,y,w,h)
     det = model.module.model[-1] if is_parallel(model) else model.model[-1]  # Detect() module
     na, nt = det.na, targets.shape[0]  # number of anchors, targets
@@ -317,11 +344,8 @@ def build_targets(p, targets, model, assocs):
     tcls, tbox, indices, anch, tasc = [], [], [], [], []
 
     temb = []
-    gain = torch.ones(7 + 1, device=targets.device)  # normalized to gridspace gain
+    gain = torch.ones(7 + 1, device=targets.device)  # normalized to gridspace gain. 7+1 because we later append the anchor pair indices to the target for reference
     ai = torch.arange(na, device=targets.device).float().view(na, 1).repeat(1, nt)  # same as .repeat_interleave(nt)
-
-    # Appending associations directly to the targets here        
-    targets = torch.cat((targets, assocs.view(-1,1)), 1)
 
     # Repeat the targets 3 times for each indices and append the anchor pair indices to it for reference
     targets = torch.cat((targets.repeat(na, 1, 1), ai[:, :, None]), 2)  # append anchor indices
@@ -378,12 +402,13 @@ def build_targets(p, targets, model, assocs):
         gi, gj = gij.T  # grid xy indices
 
         # Append
-        asc = t[:, 6].long() # association numbers
         a = t[:, 7].long()  # anchor indices
         indices.append((b, a, gj.clamp_(0, gain[3] - 1), gi.clamp_(0, gain[2] - 1)))  # image, anchor, grid indices
         tbox.append(torch.cat((gxy - gij, gwh), 1))  # box
         anch.append(anchors[a])  # anchors
         tcls.append(c)  # class
+
+        asc = t[:, (6, 0)].long() # association numbers amd associated batch id
         tasc.append(asc)
 
 
