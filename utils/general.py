@@ -259,6 +259,78 @@ def wh_iou(wh1, wh2):
 
 from scipy.spatial import distance
 
+def score_pairs(prediction, body_label = 0, face_label = 1, delta = 10):
+    output = []
+
+    for pred in prediction:
+        b_emb = pred[pred[:, -2] == body_label][:, -1, None]
+        f_emb = pred[pred[:, -2] == face_label][:, -1, None]
+
+        if 0 in f_emb.shape or 0 in b_emb.shape:
+            break
+
+        # import pdb; pdb.set_trace()
+        pred = torch.cat((pred[pred[:, -2] == body_label]
+                        ,pred[pred[:, -2] == face_label]), 0)
+
+        # import pdb; pdb.set_trace()
+        dist_matrix = distance.cdist(b_emb.cpu(), f_emb.cpu())
+        # _shape = dist_matrix.shape
+
+        sorted_ind = np.unravel_index(np.argsort(dist_matrix, axis=None), dist_matrix.shape)[::-1] # Rows against columns
+        face_indices = torch.where(pred[:, -2] == face_label)[0]
+
+        # Efficient matching ==============        
+        # sorted_first_indexes = np.unique(sorted_ind[1], return_index=True)[1]
+        # # pair_indices = sorted_ind[0][sorted_first_indexes], sorted_ind[1][sorted_first_indexes]
+        # # pair_scores = dist_matrix[pair_indices]
+        # # TODO: Make sure that associated_bodies are unqiue. If they arent. We have to remove the face from the associated body
+        # associated_bodies = sorted_ind[0][sorted_first_indexes]
+        # pred[face_indices, -1] = torch.tensor(associated_bodies, device=pred.device).float()
+        # Efficient matching ==============
+
+        # Inefficient matching ==============
+        # associated_bodies = torch.ones_like(pred[face_indices, -1]) * -1
+        # seen_body = set()
+        # seen_face = set()
+        # for body, face in zip(*sorted_ind):
+        #     if face not in seen_face:
+        #         seen_face.add(face)
+        #         if body not in seen_body:
+        #             seen_body.add(body)
+        #             associated_bodies[face] = body
+
+        # pred[face_indices, -1] = associated_bodies
+        # Inefficient matching ==============
+
+        # Mathcing with IOU ==============
+        # Traverse all face indices
+        # For that face find the sorted distances
+        # If with the body pair the face has an IOU choose that body as the associated body and break
+        # Add the body to the seen body set
+        associated_bodies = torch.ones_like(pred[face_indices, -1]) * -1
+        body_count, face_count = dist_matrix.shape
+        seen_body = set()
+        for f in range(face_count):
+            sorted_bodies = sorted_ind[0][np.where(sorted_ind[1] == f)]
+            
+            # Filter the bodies with an IOU with the face bounding box
+            curr_face = pred[body_count + f]
+            for body_idx in sorted_bodies:
+                curr_body = pred[body_idx]
+
+                if body_idx not in seen_body and  box_iou(curr_face[None, :4], curr_body[None, :4]) > 0:
+                    associated_bodies[f] = body_idx
+                    seen_body.add(body_idx)
+
+        pred[face_indices, -1] = associated_bodies
+        # Mathcing with IOU ==============
+
+        output.append(pred)
+    
+    return output
+
+
 def associate_predictions(prediction, body_label = 0, face_label = 1, delta = 10):
     """Performs associations between faces and bodies based on the embedding vector
 
@@ -287,15 +359,15 @@ def associate_predictions(prediction, body_label = 0, face_label = 1, delta = 10
         # Because a face has to be associated with a body. We choose to minimise the face column. 
         # Now for f[0] the best body is argmin(b_emb[0])
         associated_bodies = set()
+
         face_idx = 0
         for i, p in enumerate(pred):
             if p[-2] == body_label:
                 continue
 
             min_body_idx = np.argmin(dist_matrix[:, face_idx])
+
             if min_body_idx not in associated_bodies: 
-                # TODO: Add body and face iou check
-                
                 p[-1] = min_body_idx
                 associated_bodies.add(min_body_idx)
             else:

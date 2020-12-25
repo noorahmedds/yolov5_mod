@@ -124,31 +124,33 @@ def pull_loss(predicted_embeddings, tcls, tasc, device):
             body_indices = torch.where(person_cls == 0)[0]
 
             # ====== Mean Loss ========
-            # body_embeddings = person_embeddings[body_indices]
-            # face_embeddings = person_embeddings[faces_indices]
-            # if 0 not in face_embeddings.shape and 0 not in body_embeddings.shape:
-            #     all_loss += torch.abs(body_embeddings.mean() - face_embeddings.mean())
+            body_embeddings = person_embeddings[body_indices]
+            face_embeddings = person_embeddings[faces_indices]
+            if 0 not in face_embeddings.shape and 0 not in body_embeddings.shape:
+                all_loss += torch.abs(body_embeddings.mean() - face_embeddings.mean())
+                n_persons += 1 # Only the person which has both embeddings should be counted
             # ====== Mean Loss ========
 
-            # Original Loss ===========
-            # for each body traverse all faces and get embeddings
-            person_loss = torch.zeros(1, device=device)
-            pair_count = 0
-            for bi in body_indices:
-                e_body = person_embeddings[bi]
-                for fi in faces_indices:
-                    e_face = person_embeddings[fi]
+            # # Original Loss ===========
+            # # for each body traverse all faces and get embeddings
+            # person_loss = torch.zeros(1, device=device)
+            # pair_count = 0
+            # for bi in body_indices:
+            #     e_body = person_embeddings[bi]
+            #     for fi in faces_indices:
+            #         e_face = person_embeddings[fi]
 
-                    ek = (e_body + e_face) / 2 # ek is the average of the two embeddings
-                    person_loss += (e_face - ek)**2 + (e_body - ek)**2
-                    pair_count += 1
+            #         ek = (e_body + e_face) / 2 # ek is the average of the two embeddings
+            #         person_loss += (e_face - ek)**2 + (e_body - ek)**2
+            #         pair_count += 1
             
-            if pair_count != 0:
-                person_loss /= pair_count
+            # if pair_count != 0:
+            #     person_loss /= pair_count
 
-            all_loss += person_loss
-            # Original Loss ===========
-        n_persons += person_ids.shape[0]
+            # all_loss += person_loss
+        # n_persons += person_ids.shape[0]
+        # # Original Loss ===========
+
 
     if n_persons != 0:
         all_loss /= n_persons
@@ -184,6 +186,7 @@ def push_loss(predicted_embeddings, tcls, tasc, device, delta=1):
 
 
         if person_ids.shape[0] > 1: # Need more than one person to calculate push loss
+            den = 0
             for pair in combinations(person_ids, 2): # Creating combinations
                 ci = pair[0]
                 oi = pair[1]
@@ -194,6 +197,8 @@ def push_loss(predicted_embeddings, tcls, tasc, device, delta=1):
                 o_indices = torch.where(tasc_ == oi)
                 if 0 in o_indices[0].shape: continue
 
+                den += 1
+
                 c_person_cls = tcls_[c_indices] # Classes from target for this person
                 c_person_embeddings = predicted_embeddings_[c_indices] # Predicted embeddings for this person
                 o_person_cls = tcls_[o_indices] # Classes from target for this person
@@ -201,7 +206,7 @@ def push_loss(predicted_embeddings, tcls, tasc, device, delta=1):
 
                 all_loss += torch.max(torch.zeros(1, device=device), 1 - torch.abs(c_person_embeddings.mean() - o_person_embeddings.mean()))
 
-            den = nCr(person_ids.shape[0],2)
+            # den = nCr(person_ids.shape[0],2)
             combination_count += den
 
     if combination_count > 0:
@@ -323,8 +328,8 @@ def compute_loss(p, targets, model, compute_embedding_loss = False, alpha = 0.1)
 
     # Lets start effecting weights to the pull push loss once our box and objectness loss is below a particular threshold
     if targets.shape[0] and compute_embedding_loss and len(predicted_embeddings):
-        lpull += alpha * pull_loss(predicted_embeddings, tcls, tasc, device)
-        lpush += alpha * push_loss(predicted_embeddings, tcls, tasc, device) # Alpha from the corner net paper
+        lpull += pull_loss(predicted_embeddings, tcls, tasc, device)
+        lpush += push_loss(predicted_embeddings, tcls, tasc, device) # Alpha from the corner net paper
         # pass
 
     s = 3 / no  # output count scaling
@@ -332,6 +337,9 @@ def compute_loss(p, targets, model, compute_embedding_loss = False, alpha = 0.1)
     lobj *= h['obj'] * s * (1.4 if no == 4 else 1.)
     lcls *= h['cls'] * s
     bs = tobj.shape[0]  # batch size
+
+    lpull *= alpha
+    lpush *= alpha
 
     loss = lbox + lobj + lcls + lpull + lpush
     return loss * bs, torch.cat((lbox, lobj, lcls, loss, lpull, lpush)).detach()

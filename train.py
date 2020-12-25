@@ -287,7 +287,9 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
             with amp.autocast(enabled=cuda):
                 pred = model(imgs)  # forward
                 # Targets contains the following: img_id, class_score, box coords
-                loss, loss_items = compute_loss(pred, targets.to(device), model, compute_embedding_loss = epoch >= 0)  # loss scaled by batch_size
+                # loss, loss_items = compute_loss(pred, targets.to(device), model, compute_embedding_loss = epoch >= 10)  # loss scaled by batch_size
+                loss, loss_items = compute_loss(pred, targets.to(device), model, compute_embedding_loss = True)  # loss scaled by batch_size
+
                 if rank != -1:
                     loss *= opt.world_size  # gradient averaged between devices in DDP mode
 

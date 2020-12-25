@@ -10,7 +10,7 @@ from numpy import random, ascontiguousarray
 from models.experimental import attempt_load
 from utils.datasets import LoadStreams, LoadImages, letterbox
 from utils.general import check_img_size, non_max_suppression, apply_classifier, scale_coords, xyxy2xywh, \
-    strip_optimizer, set_logging, increment_path, associate_predictions
+    strip_optimizer, set_logging, increment_path, associate_predictions, score_pairs
 from utils.plots import plot_one_box
 from utils.torch_utils import select_device, load_classifier, time_synchronized
 
@@ -75,7 +75,7 @@ def detect(save_img=False):
         t2 = time_synchronized()
 
         # Association
-        pred = associate_predictions(pred)
+        pred = score_pairs(pred)
 
         # Apply Classifier
         if classify:
