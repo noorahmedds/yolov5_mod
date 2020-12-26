@@ -259,8 +259,17 @@ def wh_iou(wh1, wh2):
 
 from scipy.spatial import distance
 
-def score_heuristically(prediction, body_label = 0, face_label = 1):
+def score_heuristically(prediction, body_label = 0, face_label = 1, avg_iou = 0.1273553777409504, std_iou = 0.13013710033012083, avg_vector=[0.10938075, 0.03918036]):
     output = []
+
+    iou_thres = 0.025 # The range in which a face should normally lie for a person. This is hand featured by determining std of facial IOU with the body. 
+    iou_thres_dr = avg_iou + (2*std_iou) - 0.025
+
+    if len(prediction) != 0:
+        avg_vector = torch.tensor([avg_vector], device=prediction[0].device)
+    alpha = 0.6 # weight multiple for the vector dissimilarity scores
+    beta = 1 - alpha # weight multiple for the iou similarity scores
+    cos = torch.nn.CosineSimilarity(dim = 1)
 
     for pred in prediction:
         b_emb = pred[pred[:, -2] == body_label][:, -1, None]
@@ -281,13 +290,6 @@ def score_heuristically(prediction, body_label = 0, face_label = 1):
         # For each body find the faces with an IOU atleast greater that 0.025
         # Now sort the filtered faces by IOU again. Sort the faces by their IOU distances to (0.1273553777409504, found over dataset)
         # Also sort the faces by relative position. Sort the faces by their relative distance from [0.10938075 0.03918036]*gain
-        iou_thres = 0.025
-        avg_iou = 0.1273553777409504
-        avg_vector = torch.tensor([[0.10938075, 0.03918036]], device=pred.device)
-        alpha = 0.6 # weight multiple for the vector dissimilarity scores
-        beta = 1 - alpha # weight multiple for the iou similarity scores
-        cos = torch.nn.CosineSimilarity(dim = 1)
-
         bodies = pred[pred[:, -2] == body_label]
         faces = pred[pred[:, -2] == face_label]
         assoc_faces_set = torch.ones(faces.shape[0]).bool()
@@ -295,7 +297,8 @@ def score_heuristically(prediction, body_label = 0, face_label = 1):
         n_body = bodies.shape[0]
         for bix, body in enumerate(bodies):
             ious = box_iou(body[None, :4], faces[:, :4])
-            filtered_indices = list(torch.where(ious > iou_thres))
+            # filtered_indices = list(torch.where(ious > iou_thres_range[0]))
+            filtered_indices = list(torch.where(abs(ious - iou_thres - (iou_thres_dr/2)) <= iou_thres_dr/2)) # Keeping between the iou thresh range
 
             # TODO: Filter also the faces which have already been associated
             filtered_indices[1] = filtered_indices[1][assoc_faces_set[filtered_indices[1]] == True]
@@ -320,7 +323,7 @@ def score_heuristically(prediction, body_label = 0, face_label = 1):
             relative_vectors = (faces[filtered_indices[1], :2] - body[:2]) / body[2:4] # Relative vector
             scored_cs = (1 - cos(avg_vector, relative_vectors))
 
-            total_score = scored_ious + scored_cs
+            total_score = (alpha*scored_ious) + (beta*scored_cs)
             # Now we have scored the filtered faces we need to find a cummulatic score. This will be their positions in the scored tensors
             best_index = total_score.sort().indices[0]
             final_face = filtered_indices[1][best_index]
