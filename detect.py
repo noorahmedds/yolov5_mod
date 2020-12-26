@@ -10,7 +10,7 @@ from numpy import random, ascontiguousarray
 from models.experimental import attempt_load
 from utils.datasets import LoadStreams, LoadImages, letterbox
 from utils.general import check_img_size, non_max_suppression, apply_classifier, scale_coords, xyxy2xywh, \
-    strip_optimizer, set_logging, increment_path, associate_predictions, score_pairs
+    strip_optimizer, set_logging, increment_path, associate_predictions, score_pairs, score_heuristically
 from utils.plots import plot_one_box
 from utils.torch_utils import select_device, load_classifier, time_synchronized
 
@@ -75,7 +75,8 @@ def detect(save_img=False):
         t2 = time_synchronized()
 
         # Association
-        pred = score_pairs(pred)
+        # pred = score_pairs(pred)
+        pred = score_heuristically(pred)
 
         # Apply Classifier
         if classify:
@@ -102,7 +103,7 @@ def detect(save_img=False):
                     s += '%g %ss, ' % (n, names[int(c)])  # add to string
 
                 # Write results
-                for *xyxy, conf, cls, assoc_body_idx in reversed(det):
+                for *xyxy, conf, cls, assoc_body_idx in det:
                     if save_txt:  # Write to file
                         xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
                         line = (cls, *xywh, conf) if opt.save_conf else (cls, *xywh)  # label format
@@ -114,7 +115,9 @@ def detect(save_img=False):
 
                         body_xyxy = None
                         # import pdb; pdb.set_trace()
-                        if names[int(cls)] == "face" and int(assoc_body_idx) != -1:
+                        # if names[int(cls)] == "face" and int(assoc_body_idx) != -1:
+                        #     *body_xyxy, _, _, _ = det[int(assoc_body_idx)]
+                        if names[int(cls)] == "body" and int(assoc_body_idx) != -1:
                             *body_xyxy, _, _, _ = det[int(assoc_body_idx)]
 
                         plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=3, body_xyxy=body_xyxy)

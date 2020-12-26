@@ -103,6 +103,8 @@ def pull_loss(predicted_embeddings, tcls, tasc, device):
     batches = tasc_all[:,-1].unique()
     all_loss = torch.zeros(1, device=device)
     
+    per_person_mean_emb = []
+
     n_persons = 0
     # Traverse Batches first
     for batch in batches:
@@ -126,6 +128,7 @@ def pull_loss(predicted_embeddings, tcls, tasc, device):
             # ====== Mean Loss ========
             body_embeddings = person_embeddings[body_indices]
             face_embeddings = person_embeddings[faces_indices]
+            per_person_mean_emb.append(person_embeddings.mean())
             if 0 not in face_embeddings.shape and 0 not in body_embeddings.shape:
                 all_loss += torch.abs(body_embeddings.mean() - face_embeddings.mean())
                 n_persons += 1 # Only the person which has both embeddings should be counted
@@ -150,7 +153,6 @@ def pull_loss(predicted_embeddings, tcls, tasc, device):
             # all_loss += person_loss
         # n_persons += person_ids.shape[0]
         # # Original Loss ===========
-
 
     if n_persons != 0:
         all_loss /= n_persons
@@ -329,7 +331,7 @@ def compute_loss(p, targets, model, compute_embedding_loss = False, alpha = 0.1)
     # Lets start effecting weights to the pull push loss once our box and objectness loss is below a particular threshold
     if targets.shape[0] and compute_embedding_loss and len(predicted_embeddings):
         lpull += pull_loss(predicted_embeddings, tcls, tasc, device)
-        lpush += push_loss(predicted_embeddings, tcls, tasc, device) # Alpha from the corner net paper
+        # lpush += push_loss(predicted_embeddings, tcls, tasc, device) # Alpha from the corner net paper
         # pass
 
     s = 3 / no  # output count scaling
@@ -339,7 +341,7 @@ def compute_loss(p, targets, model, compute_embedding_loss = False, alpha = 0.1)
     bs = tobj.shape[0]  # batch size
 
     lpull *= alpha
-    lpush *= alpha
+    # lpush *= alpha
 
     loss = lbox + lobj + lcls + lpull + lpush
     return loss * bs, torch.cat((lbox, lobj, lcls, loss, lpull, lpush)).detach()

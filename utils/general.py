@@ -259,7 +259,83 @@ def wh_iou(wh1, wh2):
 
 from scipy.spatial import distance
 
-def score_pairs(prediction, body_label = 0, face_label = 1, delta = 10):
+def score_heuristically(prediction, body_label = 0, face_label = 1):
+    output = []
+
+    for pred in prediction:
+        b_emb = pred[pred[:, -2] == body_label][:, -1, None]
+        f_emb = pred[pred[:, -2] == face_label][:, -1, None]
+
+        if 0 in f_emb.shape or 0 in b_emb.shape:
+            break
+
+        # Sort the predictions by cls label. face first and body next
+        # pred = torch.cat((pred[pred[:, -2] == body_label], 
+        #                 pred[pred[:, -2] == face_label]), 0)
+        pred = torch.cat((pred[pred[:, -2] == body_label], 
+                        pred[pred[:, -2] == face_label]), 0)
+
+
+        # Mathcing with IOU and Relative Position ==============
+        # Traverse all body indices
+        # For each body find the faces with an IOU atleast greater that 0.025
+        # Now sort the filtered faces by IOU again. Sort the faces by their IOU distances to (0.1273553777409504, found over dataset)
+        # Also sort the faces by relative position. Sort the faces by their relative distance from [0.10938075 0.03918036]*gain
+        iou_thres = 0.025
+        avg_iou = 0.1273553777409504
+        avg_vector = torch.tensor([[0.10938075, 0.03918036]], device=pred.device)
+        alpha = 0.6 # weight multiple for the vector dissimilarity scores
+        beta = 1 - alpha # weight multiple for the iou similarity scores
+        cos = torch.nn.CosineSimilarity(dim = 1)
+
+        bodies = pred[pred[:, -2] == body_label]
+        faces = pred[pred[:, -2] == face_label]
+        assoc_faces_set = torch.ones(faces.shape[0]).bool()
+
+        n_body = bodies.shape[0]
+        for bix, body in enumerate(bodies):
+            ious = box_iou(body[None, :4], faces[:, :4])
+            filtered_indices = list(torch.where(ious > iou_thres))
+
+            # TODO: Filter also the faces which have already been associated
+            filtered_indices[1] = filtered_indices[1][assoc_faces_set[filtered_indices[1]] == True]
+            filtered_indices[0] = torch.zeros_like(filtered_indices[1])
+
+            filtered_ious = ious[filtered_indices]
+
+            if 0 in filtered_indices[1].shape:
+                # import pdb; pdb.set_trace()
+                pred[bix, -1] = -1
+                continue
+
+            if 0 in filtered_ious.shape:
+                pred[bix, -1] = -1
+                continue
+            
+            # scored_ious = torch.abs(filtered_ious - avg_iou).sort().indices # Sorted face indices by distance from avg iou
+
+            # # Need to sort these relative vectors by dissimilarity to the avg vector
+            scored_ious = torch.abs(filtered_ious - avg_iou) # Sorted face indices by distance from avg iou
+            # Need to sort these relative vectors by dissimilarity to the avg vector
+            relative_vectors = (faces[filtered_indices[1], :2] - body[:2]) / body[2:4] # Relative vector
+            scored_cs = (1 - cos(avg_vector, relative_vectors))
+
+            total_score = scored_ious + scored_cs
+            # Now we have scored the filtered faces we need to find a cummulatic score. This will be their positions in the scored tensors
+            best_index = total_score.sort().indices[0]
+            final_face = filtered_indices[1][best_index]
+            
+            pred[bix, -1] = final_face + n_body
+
+            assoc_faces_set[final_face] = False
+
+            # import pdb; pdb.set_trace()
+            # Mathcing with IOU ==============
+
+        output.append(pred)
+    return output
+
+def score_pairs(prediction, body_label = 0, face_label = 1):
     output = []
 
     for pred in prediction:
@@ -277,7 +353,7 @@ def score_pairs(prediction, body_label = 0, face_label = 1, delta = 10):
         dist_matrix = distance.cdist(b_emb.cpu(), f_emb.cpu())
         # _shape = dist_matrix.shape
 
-        sorted_ind = np.unravel_index(np.argsort(dist_matrix, axis=None), dist_matrix.shape)[::-1] # Rows against columns
+        sorted_ind = np.unravel_index(np.argsort(dist_matrix, axis=None), dist_matrix.shape) # Rows against columns
         face_indices = torch.where(pred[:, -2] == face_label)[0]
 
         # Efficient matching ==============        
