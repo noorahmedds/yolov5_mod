@@ -35,13 +35,13 @@ from utils.torch_utils import ModelEMA, select_device, intersect_dicts, torch_di
 
 logger = logging.getLogger(__name__)
 
-# try:
-#     import wandb
-# except ImportError:
-#     wandb = None
-#     logger.info("Install Weights & Biases for experiment logging via 'pip install wandb' (recommended)")
+try:
+    import wandb
+except ImportError:
+    wandb = None
+    logger.info("Install Weights & Biases for experiment logging via 'pip install wandb' (recommended)")
 
-wandb = None
+# wandb = None
 
 def train(hyp, opt, device, tb_writer=None, wandb=None):
     logger.info(f'Hyperparameters {hyp}')
@@ -261,6 +261,9 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
             pbar = tqdm(pbar, total=nb)  # progress bar
         optimizer.zero_grad()
         for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
+            if i >= 100:
+                # testing
+                break
             ni = i + nb * epoch  # number integrated batches (since train start)
             imgs = imgs.to(device, non_blocking=True).float() / 255.0  # uint8 to float32, 0-255 to 0.0-1.0
 
@@ -355,10 +358,12 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
 
             # Log
             tags = ['train/box_loss', 'train/obj_loss', 'train/cls_loss',  # train loss
+                    'train/push_loss', 'train/pull_loss',
                     'metrics/precision', 'metrics/recall', 'metrics/mAP_0.5', 'metrics/mAP_0.5:0.95',
                     'val/box_loss', 'val/obj_loss', 'val/cls_loss',  # val loss
-                    'x/lr0', 'x/lr1', 'x/lr2']  # params
-            for x, tag in zip(list(mloss[:-1]) + list(results) + lr, tags):
+                    'x/lr0', 'x/lr1', 'x/lr2',]  # params
+
+            for x, tag in zip(list(mloss[:-3]) + list(mloss[-2:]) + list(results) + lr, tags):
                 if tb_writer:
                     tb_writer.add_scalar(tag, x, epoch)  # tensorboard
                 if wandb:

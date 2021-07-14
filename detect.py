@@ -75,8 +75,8 @@ def detect(save_img=False):
         t2 = time_synchronized()
 
         # Association
-        # pred = score_pairs(pred)
-        pred = score_heuristically(pred)
+        pred = score_pairs(pred)
+        # pred = score_heuristically(pred)
 
         # Apply Classifier
         if classify:

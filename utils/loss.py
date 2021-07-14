@@ -108,7 +108,7 @@ def pull_loss(predicted_embeddings, tcls, tasc, device):
     n_persons = 0
     # Traverse Batches first
     for batch in batches:
-        batch_indices = torch.where(tasc_all[:, -1] == batch)
+        batch_indices = torch.where(tasc_all[:, -1] == batch) # getting the persons where the batch number is matched out of the predictions.
 
         person_ids = tasc_all[batch_indices][:, 0].unique()
 
