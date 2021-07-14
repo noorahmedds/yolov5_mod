@@ -331,7 +331,7 @@ def compute_loss(p, targets, model, compute_embedding_loss = False, alpha = 0.1)
     # Lets start effecting weights to the pull push loss once our box and objectness loss is below a particular threshold
     if targets.shape[0] and compute_embedding_loss and len(predicted_embeddings):
         lpull += pull_loss(predicted_embeddings, tcls, tasc, device)
-        # lpush += push_loss(predicted_embeddings, tcls, tasc, device) # Alpha from the corner net paper
+        lpush += push_loss(predicted_embeddings, tcls, tasc, device) # Alpha from the corner net paper
         # pass
 
     s = 3 / no  # output count scaling

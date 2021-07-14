@@ -1,3 +1,16 @@
+## How to get started:
+
+
+0. Create folder named `hlcv_project` and inside `git clone https://github.com/noorahmedds/yolov5_mod.git`
+1. Create a virtual environment with Python 3.8.10
+2. Install the requirments with the pip package manager using the command `pip install -r requirement.txt`
+3. Inside the `hlcv_project` folder, Download the dataset from the link provided and unzip it. 
+4. To run the experiment run the following in the terminal `python train.py --img 320 --batch 1 --epochs 500 --data data/bodyface.yaml --cfg ./models/yolov5s.yaml --name embedding_yolo`
+5. When you run it first you will be asked to set up wandb. Follow the instructions in the terminal to set it up.
+6. Let the code run till the end.
+
+---
+
 <a href="https://apps.apple.com/app/id1452689527" target="_blank">
 <img src="https://user-images.githubusercontent.com/26833433/98699617-a1595a00-2377-11eb-8145-fc674eb9b1a7.jpg" width="1000"></a>
 &nbsp
