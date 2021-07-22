@@ -65,6 +65,8 @@ def plot_one_box(x, img, color=None, label=None, line_thickness=None, body_xyxy=
     #     cv2.rectangle(img, c1, c2, color, -1, cv2.LINE_AA)  # filled
     #     cv2.putText(img, label, (c1[0], c1[1] - 2), 0, tl / 3, [225, 255, 255], thickness=tf, lineType=cv2.LINE_AA)
 
+    # convert normalise the embedding vectors.
+
     # TODO: Uncomment
     if not isinstance(body_xyxy, type(None)):
         bc1 = (int(body_xyxy[0]), int(body_xyxy[1]))

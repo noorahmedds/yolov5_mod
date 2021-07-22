@@ -13,6 +13,7 @@ from utils.general import check_img_size, non_max_suppression, apply_classifier,
     strip_optimizer, set_logging, increment_path, associate_predictions, score_pairs, score_heuristically
 from utils.plots import plot_one_box
 from utils.torch_utils import select_device, load_classifier, time_synchronized
+import colorsys
 
 
 def detect(save_img=False):
@@ -103,7 +104,9 @@ def detect(save_img=False):
                     s += '%g %ss, ' % (n, names[int(c)])  # add to string
 
                 # Write results
-                for *xyxy, conf, cls, assoc_body_idx in det:
+                # ac = det[:, -1]
+                # ac = (ac - ac.min())/(ac.max() - ac.min())
+                for idx, (*xyxy, conf, cls, assoc_body_idx) in enumerate(det):
                     if save_txt:  # Write to file
                         xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
                         line = (cls, *xywh, conf) if opt.save_conf else (cls, *xywh)  # label format
@@ -115,12 +118,18 @@ def detect(save_img=False):
 
                         body_xyxy = None
                         # import pdb; pdb.set_trace()
-                        # if names[int(cls)] == "face" and int(assoc_body_idx) != -1:
-                        #     *body_xyxy, _, _, _ = det[int(assoc_body_idx)]
-                        if names[int(cls)] == "body" and int(assoc_body_idx) != -1:
+                        if names[int(cls)] == "face" and int(assoc_body_idx) != -1:
                             *body_xyxy, _, _, _ = det[int(assoc_body_idx)]
+                        # if names[int(cls)] == "body" and int(assoc_body_idx) != -1:
+                        #     *body_xyxy, _, _, _ = det[int(assoc_body_idx)]
 
+                        # color_hsv = (float(ac[idx]), 0, 1)
+                        # color_rgb = [x * 255 for x in colorsys.hsv_to_rgb(*color_hsv)]
+
+                        # Find colors by rgb value
+                        # TODO: Color based on the embedding vector
                         plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=3, body_xyxy=body_xyxy)
+                        # plot_one_box(xyxy, im0, label=label, color=color_rgb, line_thickness=3, body_xyxy=body_xyxy)
 
             # Print time (inference + NMS)
             print('%sDone. (%.3fs)' % (s, t2 - t1))

@@ -261,6 +261,10 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
             pbar = tqdm(pbar, total=nb)  # progress bar
         optimizer.zero_grad()
         for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
+
+            if i > 10:
+                break
+
             ni = i + nb * epoch  # number integrated batches (since train start)
             imgs = imgs.to(device, non_blocking=True).float() / 255.0  # uint8 to float32, 0-255 to 0.0-1.0
 
@@ -349,7 +353,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
 
             # Write
             with open(results_file, 'a') as f:
-                f.write(s + '%10.4g' * 7 % results + '\n')  # P, R, mAP@.5, mAP@.5-.95, val_loss(box, obj, cls)
+                f.write(s + '%10.4g' * 9 % results + '\n')  # P, R, mAP@.5, mAP@.5-.95, val_loss(box, obj, cls)
             if len(opt.name) and opt.bucket:
                 os.system('gsutil cp %s gs://%s/results/results%s.txt' % (results_file, opt.bucket, opt.name))
 
@@ -358,6 +362,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
                     'train/push_loss', 'train/pull_loss',
                     'metrics/precision', 'metrics/recall', 'metrics/mAP_0.5', 'metrics/mAP_0.5:0.95',
                     'val/box_loss', 'val/obj_loss', 'val/cls_loss',  # val loss
+                    'val/push_loss', 'val/pull_loss',
                     'x/lr0', 'x/lr1', 'x/lr2',]  # params
 
             for x, tag in zip(list(mloss[:-3]) + list(mloss[-2:]) + list(results) + lr, tags):

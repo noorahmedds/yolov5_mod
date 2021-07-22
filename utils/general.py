@@ -345,11 +345,13 @@ def score_heuristically(prediction, body_label = 0, face_label = 1, avg_iou = 0.
 
             # # Need to sort these relative vectors by dissimilarity to the avg vector
             scored_ious = torch.abs(area_ratios - avg_iou) # Sorted face indices by distance from avg iou
+
             # Need to sort these relative vectors by dissimilarity to the avg vector
             relative_vectors = (faces[filtered_indices[1], :2] - body[:2]) / body[2:4] # Relative vector
             scored_cs = (1 - cos(avg_vector, relative_vectors))
 
             total_score = (alpha*scored_ious) + (beta*scored_cs)
+
             # Now we have scored the filtered faces we need to find a cummulatic score. This will be their positions in the scored tensors
             best_index = total_score.sort().indices[0]
             final_face = filtered_indices[1][best_index]
@@ -364,26 +366,45 @@ def score_heuristically(prediction, body_label = 0, face_label = 1, avg_iou = 0.
         output.append(pred)
     return output
 
+def f7(seq):
+    seen = set()
+    seen_add = seen.add
+    return [x for x in seq if not (x in seen or seen_add(x))]
+
+def find_target(tcls_tensor, tbox, prediction, label, iou_thresh, targets):
+    """ Returns the target box and the index in the tbox box """
+    ti = (tcls_tensor == torch.tensor(label)).nonzero(as_tuple=False).view(-1) # target indices
+    ious, i = box_iou(prediction[:4].unsqueeze(0), tbox[ti]).max(1)  # best ious, indices.
+
+    if (ious > iou_thresh).item():
+        return tbox[ti[i]], ti[i], targets[ti[i]]
+
+    return None, None, None
+
 def score_pairs(prediction, body_label = 0, face_label = 1):
     output = []
 
+    lower_bound = 0.0001
+    iou_thresh = 0
+    # Need to send the targets which are regressed by these predictions
     for pred in prediction:
         b_emb = pred[pred[:, -2] == body_label][:, -1, None]
         f_emb = pred[pred[:, -2] == face_label][:, -1, None]
 
         if 0 in f_emb.shape or 0 in b_emb.shape:
+            # Set all associations to zero if one of the classes is not present
+            pred[:, -1] = -1
+            output.append(pred)
             break
 
-        # import pdb; pdb.set_trace()
-        pred = torch.cat((pred[pred[:, -2] == body_label]
-                        ,pred[pred[:, -2] == face_label]), 0)
+        pred = torch.cat((pred[pred[:, -2] == body_label], pred[pred[:, -2] == face_label]), 0)
 
-        # import pdb; pdb.set_trace()
         dist_matrix = distance.cdist(b_emb.cpu(), f_emb.cpu())
         # _shape = dist_matrix.shape
 
-        sorted_ind = np.unravel_index(np.argsort(dist_matrix, axis=None), dist_matrix.shape) # Rows against columns
+        sorted_ind = np.unravel_index(np.argsort(dist_matrix, axis=None), dist_matrix.shape) # sorted_ind[0] = bodies, sorted_ind[1] = faces
         face_indices = torch.where(pred[:, -2] == face_label)[0]
+        body_indices = torch.where(pred[:, -2] == body_label)[0]
 
         # Efficient matching ==============        
         # sorted_first_indexes = np.unique(sorted_ind[1], return_index=True)[1]
@@ -408,28 +429,59 @@ def score_pairs(prediction, body_label = 0, face_label = 1):
         # pred[face_indices, -1] = associated_bodies
         # Inefficient matching ==============
 
-        # Mathcing with IOU ==============
-        # Traverse all face indices
-        # For that face find the sorted distances
-        # If with the body pair the face has an IOU choose that body as the associated body and break
-        # Add the body to the seen body set
+        # New matching ==============
+        # A Unique, non associated, overlapping pair should occur in sorted order
+        # Thresholding done on the IOU
+        # The sorted distance should be above a minimum threshold
         associated_bodies = torch.ones_like(pred[face_indices, -1]) * -1
+        associated_faces = torch.ones_like(pred[body_indices, -1]) * -1
         body_count, face_count = dist_matrix.shape
-        seen_body = set()
-        for f in range(face_count):
-            sorted_bodies = sorted_ind[0][np.where(sorted_ind[1] == f)]
-            
-            # Filter the bodies with an IOU with the face bounding box
-            curr_face = pred[body_count + f]
-            for body_idx in sorted_bodies:
-                curr_body = pred[body_idx]
+        seen_bodies = set()
+        seen_faces = set()
+        for i in range(dist_matrix.size):
+            f_ind = sorted_ind[1][i]
+            b_ind = sorted_ind[0][i]
+            if f_ind not in seen_faces and b_ind not in seen_bodies and dist_matrix[b_ind][f_ind] > lower_bound:
+                curr_face = pred[body_count + f_ind]
+                curr_body = pred[b_ind]
+                if box_iou(curr_face[None, :4], curr_body[None, :4]) > iou_thresh:
+                    seen_bodies.add(b_ind)
+                    seen_faces.add(f_ind)
 
-                if body_idx not in seen_body and  box_iou(curr_face[None, :4], curr_body[None, :4]) > 0:
-                    associated_bodies[f] = body_idx
-                    seen_body.add(body_idx)
+                    associated_bodies[f_ind] = b_ind
+                    associated_faces[b_ind] = f_ind + body_count
 
         pred[face_indices, -1] = associated_bodies
-        # Mathcing with IOU ==============
+        pred[body_indices, -1] = associated_faces
+        # New matching ==============
+
+
+        # # Mathcing with IOU ==============
+        # # Traverse all face indices
+        # # For that face find the sorted distances
+        # # If with the body pair the face has an IOU choose that body as the associated body and break
+        # # Add the body to the seen body set
+        # associated_bodies = torch.ones_like(pred[face_indices, -1]) * -1
+        # body_count, face_count = dist_matrix.shape
+        # seen_body = set()
+        # ordered_faces = f7(sorted_ind[1])
+        # for f in ordered_faces:
+        #     # Still doesnt work
+        #     # Bodies sorted against the given face. So that we can get the closest body
+        #     sorted_bodies = sorted_ind[0][np.where(sorted_ind[1] == f)]
+            
+        #     # Filter the bodies with an IOU with the face bounding box
+        #     curr_face = pred[body_count + f] # Finding the bounding box for the current face. The predictions are concatenated so offset by body count
+        #     for body_idx in sorted_bodies:
+        #         # The problem still arises where the current body is still not the closest association that exists.
+        #         curr_body = pred[body_idx]
+
+        #         if body_idx not in seen_body and box_iou(curr_face[None, :4], curr_body[None, :4]) > 0:
+        #             associated_bodies[f] = body_idx
+        #             seen_body.add(body_idx)
+
+        # pred[face_indices, -1] = associated_bodies
+        # # Mathcing with IOU ==============
 
         output.append(pred)
     

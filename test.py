@@ -12,8 +12,8 @@ from tqdm import tqdm
 
 from models.experimental import attempt_load
 from utils.datasets import create_dataloader
-from utils.general import coco80_to_coco91_class, check_dataset, check_file, check_img_size, box_iou, \
-    non_max_suppression, scale_coords, xyxy2xywh, xywh2xyxy, set_logging, increment_path
+from utils.general import coco80_to_coco91_class, check_dataset, check_file, check_img_size, box_iou, find_target, \
+    non_max_suppression, scale_coords, score_pairs, xyxy2xywh, xywh2xyxy, set_logging, increment_path, score_heuristically, score_pairs, find_target
 from utils.loss import compute_loss
 from utils.metrics import ap_per_class, ConfusionMatrix
 from utils.plots import plot_images, output_to_target, plot_study_txt
@@ -95,9 +95,21 @@ def test(data,
     coco91class = coco80_to_coco91_class()
     s = ('%20s' + '%12s' * 6) % ('Class', 'Images', 'Targets', 'P', 'R', 'mAP@.5', 'mAP@.5:.95')
     p, r, f1, mp, mr, map50, map, t0, t1 = 0., 0., 0., 0., 0., 0., 0., 0., 0.
-    loss = torch.zeros(3, device=device)
+    loss = torch.zeros(5, device=device)
     jdict, stats, ap, ap_class, wandb_images = [], [], [], [], []
+    assoc_stats = {
+        "tp":[0]*iouv.shape[0],
+        "tn":[0]*iouv.shape[0],
+        "fp":[0]*iouv.shape[0],
+        "fn":[0]*iouv.shape[0],
+        "total_associations":[0]*iouv.shape[0],
+        "total":[0]*iouv.shape[0]
+    }
     for batch_i, (img, targets, paths, shapes) in enumerate(tqdm(dataloader, desc=s)):
+
+        # if batch_i > 200:
+        #     break
+
         img = img.to(device, non_blocking=True)
         img = img.half() if half else img.float()  # uint8 to fp16/32
         img /= 255.0  # 0 - 255 to 0.0 - 1.0
@@ -112,7 +124,9 @@ def test(data,
 
             # Compute loss
             if training:
-                loss += compute_loss([x.float() for x in train_out], targets, model)[1][:3]  # box, obj, cls
+                int_loss = compute_loss([x.float() for x in train_out], targets, model, compute_embedding_loss=True)[1]  # box, obj, cls
+                int_loss = torch.cat((int_loss[:3], int_loss[-2:]))
+                loss += int_loss
 
             # Run NMS
             targets[:, 2:6] *= torch.Tensor([width, height, width, height]).to(device)  # to pixels
@@ -181,26 +195,193 @@ def test(data,
                 if plots:
                     confusion_matrix.process_batch(pred, torch.cat((labels[:, 0:1], tbox), 1))
 
+
                 # Per target class
+                # targets_for_predictions = torch.zeros(pred.shape[0], targets.shape[0], dtype=torch.bool, device=device) # for a target traversed py prediction set to true
+                targets_for_predictions = torch.zeros((pred.shape[0], targets.shape[0], iouv.shape[0]), dtype=torch.bool, device=device) # for a target traversed py prediction set to true
+
                 for cls in torch.unique(tcls_tensor):
-                    ti = (cls == tcls_tensor).nonzero(as_tuple=False).view(-1)  # prediction indices
-                    pi = (cls == pred[:, 5]).nonzero(as_tuple=False).view(-1)  # target indices
+                    ti = (cls == tcls_tensor).nonzero(as_tuple=False).view(-1) # target indices
+                    pi = (cls == pred[:, 5]).nonzero(as_tuple=False).view(-1)  # prediction indices
 
                     # Search for detections
                     if pi.shape[0]:
                         # Prediction to target ious
-                        ious, i = box_iou(predn[pi, :4], tbox[ti]).max(1)  # best ious, indices
+                        # Finding the ious of all target boxes against all predictions and finding max in 1st axis. 
+                        # And the maximum IOU is filtered for each prediciton box.
+                        # i contains the target box that most overlaps with the prediction box at that index
+                        ious, i = box_iou(predn[pi, :4], tbox[ti]).max(1)  # best ious, indices.
 
                         # Append detections
                         detected_set = set()
-                        for j in (ious > iouv[0]).nonzero(as_tuple=False):
-                            d = ti[i[j]]  # detected target
+                        for j in (ious > iouv[0]).nonzero(as_tuple=False): # traversing predictions which have high overlap
+                            # Targets which have above a threshold overlap are traveresed here
+                            d = ti[i[j]]  # detected target. i is the list of targets with max overlap for the prediction at each index
+                            
+                            # J contains predictions and I contains targets. 
+                            # i[j] is the target regressed by the prediction j. For prediction j we can have a list of targets traversed
+                            targets_for_predictions[j, i[j], :] = ious[j] > iouv # For each prediction, target pair we have a set of iou pass
+
+                            # if a target has not yet been detected only then do we traverse itself
+                            # Otherwise we skip this current index of prediction which 
                             if d.item() not in detected_set:
-                                detected_set.add(d.item())
-                                detected.append(d)
-                                correct[pi[j]] = ious[j] > iouv  # iou_thres is 1xn
+                                detected_set.add(d.item()) # The target is marked as already assigned
+                                
+                                # Which prediction regresses this target though
+                                # Lets store this info as well in an array
+
+                                detected.append(d) 
+                                correct[pi[j]] = ious[j] > iouv  # iou_thres is 1xn. The correct array marks the predictions if the preds regress the target at progressively increasing thresholds 
                                 if len(detected) == nl:  # all targets already located in image
+                                    # Break if all targets are found by a prediction box
                                     break
+
+                # Note that predn[:, -1] contains the embedding vectors.
+                # Only for the predictions in the detected set we score the embedding vectors and 
+                # produce pairs. Then we see if the target bodies have the same faces as the one predicted.
+                # And a simple correct count/pair count should produce accuracy
+                
+                # Score both methods though. The heuristical one and the other one as well. 
+                # For that we need to run both algos here as well
+                
+
+                # We need to traverse the iouv first
+                # For all iouv
+                    # compute output (from both methods) for correct pairs at this iouv level
+                    # Now we know which face has which body for the predictions
+                    # And we know which prediction associated with which target. 
+                    # from output traverse all pairs
+                    # for the prediction pair find targets from the targets_for_prediction array
+                body_label = 0.
+                face_label = 1.
+                for idx, iou in enumerate(iouv):
+                    correct_preds = [predn[correct[:, idx]]]
+                    output_embedding = score_pairs(correct_preds)[0]
+                    # output_heuristic = score_heuristically(correct_preds)[0]
+
+                    
+                    # ==================== OLD ACCURACIES
+                    # all_faces = output_embedding[output_embedding[:, -2] == face_label]
+                    # nassoc = (all_faces[:, -1] != -1).nonzero(as_tuple=False).flatten()
+                    # assoc_stats["total"][idx] += len(nassoc)
+
+                    # # First our method
+                    # for jidx in (output_embedding[:, -2] == face_label).nonzero(as_tuple=False):
+                    #     # Find associated body
+                    #     pred_face = output_embedding[jidx]
+                    #     pred_body_ix = int(output_embedding[jidx, -1].item())
+                    #     pred_body = None
+
+                    #     # Checking if Body is associated with the predicted face
+                    #     if pred_body_ix != -1:
+                    #         pred_body = output_embedding[pred_body_ix]
+
+                    #         # ======= Finding best target body.
+                    #         ti_body = (tcls_tensor == torch.tensor(body_label)).nonzero(as_tuple=False).view(-1) # target indices
+                    #         ious, i = box_iou(pred_body[:4].unsqueeze(0), tbox[ti_body]).max(1)  # best ious, indices.
+
+                    #         best_body_target = None
+                    #         if (ious > iou).item():
+                    #             best_body_target = targets[ti_body[i]]
+
+                    #             assoc_face_ix = ((targets[:, 1] == face_label) & (targets[:, -1] == best_body_target[:, -1])).nonzero(as_tuple=False).flatten()
+                    #             assoc_face = None
+                    #             if 0 in assoc_face_ix.shape:
+                    #                 # No associated face for the target
+                    #                 pass
+                    #             else:
+                    #                 assoc_face = targets[assoc_face_ix]
+
+                    #     # ======= Find associated face
+                    #     ti_face = (tcls_tensor == torch.tensor(face_label)).nonzero(as_tuple=False).view(-1) # target indices
+                    #     ious, i = box_iou(pred_face[:, :4], tbox[ti_face]).max(1)  # best ious, indices.
+
+                    #     best_face_target_ix = ti_face[i]
+
+                    #     # For each iouv we need to store 
+                    #     # Correct associations, True positive
+                    #     # True negative, body doesnt have face and was not associated with face
+                    #     # False positive, body had face but no association was made
+                    #     # False negative, body doesnt have face but was associated with face
+                    #     # Top-3 association -- optional
+                    #     if type(assoc_face) != type(None) and assoc_face_ix == best_face_target_ix:
+                    #         # This was a correct association from the embedding technique
+                    #         assoc_stats["tp"][idx] += 1
+                    # ====================
+
+                    all_bodies = output_embedding[output_embedding[:, -2] == body_label]
+                    nassoc = (all_bodies[:, -1] != -1).nonzero(as_tuple=False).flatten()
+                    assoc_stats["total"][idx] += all_bodies.shape[0] # The number of associations include the associations that were not made because they also amount to the accuracy
+                    assoc_stats["total_associations"][idx] += len(nassoc) # The number of associations include the associations that were not made because they also amount to the accuracy
+
+                    for jidx in (output_embedding[:, -2] == body_label).nonzero(as_tuple=False):
+
+                        # Predicted body
+                        pred_body = output_embedding[jidx].flatten()
+                        # print("This is the predicted body: ", pred_body)
+
+                        # Find target body
+                        target_body_bb, target_body_ix, target_body = find_target(tcls_tensor, tbox, pred_body, body_label, iou, targets)
+                        # print("This is the target body: ", target_body)
+
+                        # Predicted Associated Face
+                        pred_face_ix = int(output_embedding[jidx, -1].item())
+                        pred_face = None
+                        if pred_face_ix != -1:
+                            pred_face = output_embedding[pred_face_ix].flatten()
+                            # print("This is the (associated )predicted face: ", pred_face)
+                        else: 
+                            # There is no associated predicted face
+                            pass
+
+                        # Target Associated Face. Face associated with the target body
+                        target_face_ix = -1
+                        target_face = None
+                        if type(target_body) != type(None):
+                            _ix = ((targets[:, 1] == face_label) & (targets[:, -1] == target_body[:, -1])).nonzero(as_tuple=False).flatten()
+                            if len(_ix) > 0:
+                                # If there was a target body and it had an association we get it here
+                                target_face_ix = _ix
+                                target_face = targets[target_face_ix] # Found target face
+                        else:
+                            # No target body found
+                            # And this has no effect on the association accuracy
+                            # So we can just break. Because no target was found
+                            break
+                        
+                        # Correct associations, True positive
+                        # True negative, body doesnt have face and was not associated with face
+                        # False positive, body had face but no association was made 
+                        # False negative, body doesnt have face but was associated with face
+
+                        # Firstly if we have target face and predicted face check if they are the same 
+                        if type(pred_face) != type(None) and type(target_face) != type(None):
+                            # We have both faces
+                            # Finding the target face
+                            target_face_alt_bb, target_face_alt_ix, target_face_alt = find_target(tcls_tensor, tbox, pred_face, face_label, iou, targets)
+
+                            # print(target_face_ix)
+                            # print(target_face_alt_ix)
+
+                            if target_face_alt_ix == target_face_ix:
+                                # This means both the target box regressed by the prediction and the target face are the same
+                                assoc_stats["tp"][idx] += 1
+                            else:
+                                # The faces are not the same. Which means the association is wrong
+                                # This makes the association a false positive
+                                assoc_stats["fp"][idx] += 1
+                        
+                        if type(pred_face) == type(None) and type(target_face) == type(None):
+                            # No predicted face from the body and no target face from the target either
+                            assoc_stats["tp"][idx] += 1
+                        
+                        if type(target_face) != type(None) and type(pred_face) == type(None):
+                            # body had face but no association was made 
+                            assoc_stats["fp"][idx] += 1
+
+                        if type(target_face) == type(None) and type(pred_face) != type(None):
+                            # if we have a target face from the target body but no prediction was made.
+                            assoc_stats["fn"][idx] += 1
 
             # Append statistics (correct, conf, pcls, tcls)
             stats.append((correct.cpu(), pred[:, 4].cpu(), pred[:, 5].cpu(), tcls))
@@ -225,6 +406,8 @@ def test(data,
     # Print results
     pf = '%20s' + '%12.3g' * 6  # print format
     print(pf % ('all', seen, nt.sum(), mp, mr, map50, map))
+
+    print(assoc_stats)
 
     # Print results per class
     if verbose and nc > 1 and len(stats):
